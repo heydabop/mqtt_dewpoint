@@ -1,7 +1,58 @@
+use simple_error::bail;
+use std::error::Error;
+use std::fmt;
+
 // http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/MQTT_V3.1_Protocol_Specific.pdf
 
+pub enum Message {
+    Pingresp,
+    Connack,
+    Publish(Vec<u8>),
+}
+
+impl fmt::Debug for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Message::Pingresp => write!(f, "PINGRESP"),
+            Message::Connack => write!(f, "CONNACK"),
+            Message::Publish(_) => write!(f, "PUBLISH"),
+        }
+    }
+}
+
+pub const CONNACK: [u8; 4] = [0x20, 2, 0, 0];
 pub const PINGREQ: [u8; 2] = [0xC0, 0];
 pub const PINGRESP: [u8; 2] = [0xD0, 0];
+
+pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
+    if v.len() < 2 {
+        bail!("Message too short to be valid");
+    }
+    let content = &v[..(v[1] + 2) as usize]; // trim buffer down to specified length
+
+    match content[0] >> 4 {
+        2 => {
+            if content != CONNACK {
+                bail!(
+                    "Error in CONNACK, expected [32, 2, 0, 0], got {:?}",
+                    &content
+                );
+            }
+            Ok(Message::Connack)
+        }
+        13 => {
+            if content != PINGRESP {
+                bail!("Error in PINGRESP, expected [12, 0], got {:?}", &content);
+            }
+            Ok(Message::Pingresp)
+        }
+        _ => bail!(
+            "Unrecognized message type {} in message {:?}",
+            &content[0] >> 4,
+            &content
+        ),
+    }
+}
 
 pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
     let len = 20 + client_id.len() + username.len() + password.len();

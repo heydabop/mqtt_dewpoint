@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 toml = "0.5"
+simple-error = "0.2"

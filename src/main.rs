@@ -45,27 +45,33 @@ fn main() -> std::io::Result<()> {
 
     // MQTT CONNECT
 
+    println!("Connecting...");
+
     let connect_msg = mqtt::make_connect(client_id, username, password);
 
-    stream.write_all(&connect_msg[..])?;
+    stream.write_all(&connect_msg)?;
     stream.flush()?;
 
     // MQTT CONNACK
 
-    let mut buf = vec![0; 4];
-    stream.read(&mut buf[..])?;
-    println!("{:?}", buf);
-
-    if buf != [32, 2, 0, 0] {
-        eprintln!("Error response code in CONNACK");
+    let mut buf = [0; 127];
+    stream.read(&mut buf)?;
+    let connack = mqtt::parse_message(&buf).unwrap();
+    match connack {
+        mqtt::Message::Connack => (),
+        _ => panic!("Expected {:?}, got {:?}", mqtt::Message::Connack, connack),
     }
+
+    println!("Connected!");
 
     let five_sec = time::Duration::from_secs(5);
     thread::sleep(five_sec);
 
     // MQTT PINGREQ
 
-    stream.write_all(&mqtt::PINGREQ[..])?;
+    println!("Pinging...");
+
+    stream.write_all(&mqtt::PINGREQ)?;
     stream.flush()?;
 
     let five_sec = time::Duration::from_secs(5);
@@ -73,15 +79,19 @@ fn main() -> std::io::Result<()> {
 
     // MQTT PINGRESP
 
-    buf = vec![0; 2];
-    stream.read(&mut buf[..])?;
-    println!("{:?}", buf);
-
-    if buf != mqtt::PINGRESP {
-        eprintln!("Didn't receive PINGRESP after PINGREQ");
+    let mut buf = [0; 127];
+    stream.read(&mut buf)?;
+    let pingresp = mqtt::parse_message(&buf).unwrap();
+    match pingresp {
+        mqtt::Message::Pingresp => (),
+        _ => panic!("Expected {:?}, got {:?}", mqtt::Message::Pingresp, pingresp),
     }
 
+    println!("Pinged.");
+
     // MQTT DISCONNECT
+
+    println!("Disconnecting");
 
     stream.write_all(&[0xE0, 0])?;
     stream.flush()?;
