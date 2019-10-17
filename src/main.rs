@@ -1,7 +1,13 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
+use std::thread;
+use std::time;
+
+mod mqtt;
 
 fn main() -> std::io::Result<()> {
+    // config init
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
         eprintln!("Usage: {} <config.toml>", args[0]);
@@ -29,51 +35,20 @@ fn main() -> std::io::Result<()> {
         panic!("Password too long");
     }
 
+    // TCP init
+
     let mut stream = TcpStream::connect(broker_addr)?;
     stream.set_read_timeout(None)?;
     stream.set_nodelay(true)?;
 
-    // http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/MQTT_V3.1_Protocol_Specific.pdf
+    // MQTT CONNECT
 
-    let mut connect_msg: Vec<u8> = vec![0x10, 0, 0, 6]; // set remaining length (byte 2) after rest of message is set
-    for b in "MQIsdp".chars() {
-        //protocol name
-        connect_msg.push(b as u8);
-    }
-    connect_msg.push(3); // protocol version
-    connect_msg.push(0xC2); // connect flags (username, password, clean session)
-    connect_msg.push(0); // keep alive
-    connect_msg.push(10); // keep alive 10 seconds
-
-    connect_msg.push(0); // client ID len
-    connect_msg.push(client_id.len() as u8); // client ID len
-    for b in client_id.chars() {
-        // client ID
-        connect_msg.push(b as u8);
-    }
-    // no will topic or will message
-
-    connect_msg.push(0); // username length
-    connect_msg.push(username.len() as u8); // username length
-    for b in username.chars() {
-        // username
-        connect_msg.push(b as u8);
-    }
-
-    connect_msg.push(0); // password length
-    connect_msg.push(password.len() as u8); // passowrd length
-    for b in password.chars() {
-        // password
-        connect_msg.push(b as u8);
-    }
-
-    if connect_msg.len() > 127 {
-        panic!("We don't support sending large messages yet");
-    }
-    connect_msg[1] = (connect_msg.len() - 2) as u8; // set len now that we know it
+    let connect_msg = mqtt::make_connect(client_id, username, password);
 
     stream.write_all(&connect_msg[..])?;
     stream.flush()?;
+
+    // MQTT CONNACK
 
     let mut buf = vec![0; 4];
     stream.read(&mut buf[..])?;
@@ -83,7 +58,30 @@ fn main() -> std::io::Result<()> {
         eprintln!("Error response code in CONNACK");
     }
 
-    stream.write_all(&[0xE0, 0])?; // disconnect
+    let five_sec = time::Duration::from_secs(5);
+    thread::sleep(five_sec);
+
+    // MQTT PINGREQ
+
+    stream.write_all(&mqtt::PINGREQ[..])?;
+    stream.flush()?;
+
+    let five_sec = time::Duration::from_secs(5);
+    thread::sleep(five_sec);
+
+    // MQTT PINGRESP
+
+    buf = vec![0; 2];
+    stream.read(&mut buf[..])?;
+    println!("{:?}", buf);
+
+    if buf != mqtt::PINGRESP {
+        eprintln!("Didn't receive PINGRESP after PINGREQ");
+    }
+
+    // MQTT DISCONNECT
+
+    stream.write_all(&[0xE0, 0])?;
     stream.flush()?;
 
     Ok(())
