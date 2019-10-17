@@ -44,30 +44,27 @@ fn main() -> std::io::Result<()> {
     stream.set_read_timeout(None)?;
     stream.set_nodelay(true)?;
 
-    let mut ostream = stream.try_clone()?;
+    let mut o_stream = stream.try_clone()?;
 
     let (o_tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
     let (i_tx, i_rx): (mpsc::Sender<mqtt::Message>, mpsc::Receiver<mqtt::Message>) =
         mpsc::channel();
 
-    let ostream_thread = thread::spawn(move || loop {
-        match o_rx.recv() {
-            Ok(msg) => {
-                ostream.write_all(&msg[..]).unwrap();
-                ostream.flush().unwrap();
-            }
-            Err(_) => break,
-        };
+    let o_stream_thread = thread::spawn(move || {
+        while let Ok(msg) = o_rx.recv() {
+            o_stream.write_all(&msg[..]).unwrap();
+            o_stream.flush().unwrap();
+        }
     });
 
-    let istream_thread = thread::spawn(move || loop {
+    let i_stream_thread = thread::spawn(move || loop {
         let mut buf = [0; 127];
         if stream.read(&mut buf[..2]).unwrap() == 0 {
             break;
         }
         let len = (buf[1] + 2) as usize;
         if len > 0 {
-            stream.read(&mut buf[2..len]).unwrap();
+            stream.read_exact(&mut buf[2..len]).unwrap();
         }
         match mqtt::parse_message(&buf[..len]) {
             Ok(message) => i_tx.send(message).unwrap(),
@@ -124,8 +121,8 @@ fn main() -> std::io::Result<()> {
 
     drop(o_tx);
 
-    istream_thread.join().unwrap();
-    ostream_thread.join().unwrap();
+    i_stream_thread.join().unwrap();
+    o_stream_thread.join().unwrap();
 
     Ok(())
 }

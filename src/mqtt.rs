@@ -8,15 +8,13 @@ use std::fmt;
 pub enum Message {
     Pingresp,
     Connack,
-    Publish(Vec<u8>),
 }
 
 impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Message::Pingresp => write!(f, "PINGRESP"),
-            Message::Connack => write!(f, "CONNACK"),
-            Message::Publish(_) => write!(f, "PUBLISH"),
+            Self::Pingresp => write!(f, "PINGRESP"),
+            Self::Connack => write!(f, "CONNACK"),
         }
     }
 }
@@ -56,13 +54,31 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
 }
 
 pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
-    let len = 20 + client_id.len() + username.len() + password.len();
+    let client_id_len = client_id.len();
+    if client_id_len < 1 || client_id_len > 23 {
+        panic!("Client ID must be between 1 and 23 characters in length");
+    }
+    let client_id_len = client_id_len as u8;
+
+    let username_len = username.len();
+    if username_len < 1 || username_len > 12 {
+        panic!("Username should be between 1 and 23 characters in length");
+    }
+    let username_len = username_len as u8;
+
+    let password_len = password.len();
+    if password_len < 1 || password_len > 12 {
+        panic!("Password should be between 1 and 23 characters in length");
+    }
+    let password_len = password_len as u8;
+
+    let len = 20 + client_id_len + username_len + password_len;
 
     if len > 127 {
         panic!("We don't support sending large messages yet");
     }
 
-    let mut connect_msg = Vec::<u8>::with_capacity(len);
+    let mut connect_msg = Vec::<u8>::with_capacity(len as usize);
     connect_msg.push(0x10); // CONNECT
     connect_msg.push((len - 2) as u8); // message length (-2 for first 2 fixed bytes)
     connect_msg.push(0); // protocol name len
@@ -77,7 +93,7 @@ pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> 
     connect_msg.push(15); // keep alive 15 seconds
 
     connect_msg.push(0); // client ID len
-    connect_msg.push(client_id.len() as u8); // client ID len
+    connect_msg.push(client_id_len); // client ID len
     for b in client_id.chars() {
         // client ID
         connect_msg.push(b as u8);
@@ -85,14 +101,14 @@ pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> 
     // no will topic or will message
 
     connect_msg.push(0); // username length
-    connect_msg.push(username.len() as u8); // username length
+    connect_msg.push(username_len); // username length
     for b in username.chars() {
         // username
         connect_msg.push(b as u8);
     }
 
     connect_msg.push(0); // password length
-    connect_msg.push(password.len() as u8); // passowrd length
+    connect_msg.push(password_len); // passowrd length
     for b in password.chars() {
         // password
         connect_msg.push(b as u8);
