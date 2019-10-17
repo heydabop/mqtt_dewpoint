@@ -1,5 +1,6 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
+use std::sync::mpsc;
 use std::thread;
 use std::time;
 
@@ -43,20 +44,47 @@ fn main() -> std::io::Result<()> {
     stream.set_read_timeout(None)?;
     stream.set_nodelay(true)?;
 
+    let mut ostream = stream.try_clone()?;
+
+    let (o_tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
+    let (i_tx, i_rx): (mpsc::Sender<mqtt::Message>, mpsc::Receiver<mqtt::Message>) =
+        mpsc::channel();
+
+    let ostream_thread = thread::spawn(move || loop {
+        match o_rx.recv() {
+            Ok(msg) => {
+                ostream.write_all(&msg[..]).unwrap();
+                ostream.flush().unwrap();
+            }
+            Err(_) => break,
+        };
+    });
+
+    let istream_thread = thread::spawn(move || loop {
+        let mut buf = [0; 127];
+        if stream.read(&mut buf[..2]).unwrap() == 0 {
+            break;
+        }
+        let len = (buf[1] + 2) as usize;
+        if len > 0 {
+            stream.read(&mut buf[2..len]).unwrap();
+        }
+        match mqtt::parse_message(&buf[..len]) {
+            Ok(message) => i_tx.send(message).unwrap(),
+            Err(e) => eprintln!("Error parsing message: {}", e),
+        };
+    });
+
     // MQTT CONNECT
 
     println!("Connecting...");
 
-    let connect_msg = mqtt::make_connect(client_id, username, password);
-
-    stream.write_all(&connect_msg)?;
-    stream.flush()?;
+    o_tx.send(mqtt::make_connect(client_id, username, password))
+        .unwrap();
 
     // MQTT CONNACK
 
-    let mut buf = [0; 127];
-    stream.read(&mut buf)?;
-    let connack = mqtt::parse_message(&buf).unwrap();
+    let connack = i_rx.recv().unwrap();
     match connack {
         mqtt::Message::Connack => (),
         _ => panic!("Expected {:?}, got {:?}", mqtt::Message::Connack, connack),
@@ -71,17 +99,14 @@ fn main() -> std::io::Result<()> {
 
     println!("Pinging...");
 
-    stream.write_all(&mqtt::PINGREQ)?;
-    stream.flush()?;
+    o_tx.send(mqtt::PINGREQ.to_vec()).unwrap();
 
     let five_sec = time::Duration::from_secs(5);
     thread::sleep(five_sec);
 
     // MQTT PINGRESP
 
-    let mut buf = [0; 127];
-    stream.read(&mut buf)?;
-    let pingresp = mqtt::parse_message(&buf).unwrap();
+    let pingresp = i_rx.recv().unwrap();
     match pingresp {
         mqtt::Message::Pingresp => (),
         _ => panic!("Expected {:?}, got {:?}", mqtt::Message::Pingresp, pingresp),
@@ -89,12 +114,18 @@ fn main() -> std::io::Result<()> {
 
     println!("Pinged.");
 
+    drop(i_rx);
+
     // MQTT DISCONNECT
 
     println!("Disconnecting");
 
-    stream.write_all(&[0xE0, 0])?;
-    stream.flush()?;
+    o_tx.send(vec![0xE0, 0]).unwrap();
+
+    drop(o_tx);
+
+    istream_thread.join().unwrap();
+    ostream_thread.join().unwrap();
 
     Ok(())
 }
