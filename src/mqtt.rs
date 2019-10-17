@@ -4,7 +4,17 @@ pub const PINGREQ: [u8; 2] = [0xC0, 0];
 pub const PINGRESP: [u8; 2] = [0xD0, 0];
 
 pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
-    let mut connect_msg: Vec<u8> = vec![0x10, 0, 0, 6]; // set remaining length (byte 2) after rest of message is set
+    let len = 20 + client_id.len() + username.len() + password.len();
+
+    if len > 127 {
+        panic!("We don't support sending large messages yet");
+    }
+
+    let mut connect_msg = Vec::<u8>::with_capacity(len);
+    connect_msg.push(0x10); // CONNECT
+    connect_msg.push((len - 2) as u8); // message length (-2 for first 2 fixed bytes)
+    connect_msg.push(0); // protocol name len
+    connect_msg.push(6); // protocol name len
     for b in "MQIsdp".chars() {
         //protocol name
         connect_msg.push(b as u8);
@@ -35,11 +45,6 @@ pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> 
         // password
         connect_msg.push(b as u8);
     }
-
-    if connect_msg.len() > 127 {
-        panic!("We don't support sending large messages yet");
-    }
-    connect_msg[1] = (connect_msg.len() - 2) as u8; // set len now that we know it
 
     connect_msg
 }
