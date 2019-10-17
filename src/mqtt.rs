@@ -4,6 +4,7 @@ use std::fmt;
 
 // http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/MQTT_V3.1_Protocol_Specific.pdf
 
+#[derive(PartialEq)]
 pub enum Message {
     Pingresp,
     Connack,
@@ -114,5 +115,15 @@ mod test {
                 114, 100
             ]
         );
+    }
+
+    #[test]
+    fn parse_connack() {
+        assert_eq!(Message::Connack, parse_message(&CONNACK).unwrap());
+
+        let mut connack_err = CONNACK;
+        connack_err[3] = 1;
+
+        assert!(parse_message(&connack_err).is_err());
     }
 }
