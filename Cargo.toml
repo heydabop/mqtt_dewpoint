@@ -1,5 +1,5 @@
 [package]
-name = "mqtt_humidity"
+name = "mqtt_dewpoint"
 version = "0.1.0"
 authors = ["heydabop <heydabop@gmail.com>"]
 edition = "2018"
