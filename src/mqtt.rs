@@ -126,4 +126,19 @@ mod test {
 
         assert!(parse_message(&connack_err).is_err());
     }
+
+    #[test]
+    fn parse_pingresp() {
+        assert_eq!(Message::Pingresp, parse_message(&PINGRESP).unwrap());
+
+        let pingresp_err = [PINGRESP[0], 1, 0];
+
+        assert!(parse_message(&pingresp_err).is_err());
+    }
+
+    #[test]
+    fn parse_invalid() {
+        assert!(parse_message(&[PINGRESP[0]]).is_err());
+        assert!(parse_message(&[0, 1, 1]).is_err());
+    }
 }
