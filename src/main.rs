@@ -7,14 +7,16 @@ mod mqtt;
 
 fn main() -> std::io::Result<()> {
     // config init
+    let filename: &str;
 
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <config.toml>", args[0]);
-        std::process::exit(1);
+    if args.len() >= 2 {
+        filename = &args[1];
+    } else {
+        filename = "config.toml";
     }
 
-    let config = std::fs::read_to_string(&args[1])?
+    let config = std::fs::read_to_string(filename)?
         .parse::<toml::Value>()
         .unwrap();
 
