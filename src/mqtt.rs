@@ -90,7 +90,7 @@ pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> 
     connect_msg.push(3); // protocol version
     connect_msg.push(0xC2); // connect flags (username, password, clean session)
     connect_msg.push(0); // keep alive
-    connect_msg.push(15); // keep alive 15 seconds
+    connect_msg.push(60); // keep alive 60 seconds
 
     connect_msg.push(0); // client ID len
     connect_msg.push(client_id_len); // client ID len
