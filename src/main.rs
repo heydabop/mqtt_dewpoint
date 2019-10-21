@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .subscribe("zigbee2mqtt/tempSensor", calculate_dewpoint)
         .unwrap();
 
-    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement": "°C", "value_template": "{{ value_json.dewpoint}}"}"#);
+    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"°C"}"#);
 
     ctrlc::set_handler(move || {
         client.disconnect();
@@ -94,7 +94,7 @@ fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
 
     Some(mqtt::make_publish(
         "homeassistant/sensor/dewpoint/state",
-        &format!(r#"{{"dewpoint": {:.2}}}"#, dewpoint),
+        &format!("{:.2}", dewpoint),
     ))
 }
 
