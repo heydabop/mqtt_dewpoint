@@ -221,7 +221,7 @@ impl Client {
             }
             match parse_message(&buf[..len]) {
                 Ok(message) => match message {
-                    Message::Pingresp => println!("Pinged"),
+                    Message::Pingresp => {}
                     Message::Suback(msg) => {
                         let mut pending_subscribe_ids = pending_subscribe_ids
                             .lock()
@@ -258,7 +258,6 @@ impl Client {
         let ping_thread = thread::spawn(move || {
             let interval = time::Duration::from_secs(u64::from(keep_alive_secs) / 2);
             loop {
-                println!("Pinging...");
                 ping_tx.send(PINGREQ.to_vec()).unwrap();
                 thread::sleep(interval);
             }
