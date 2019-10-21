@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt;
 use std::io::prelude::*;
 use std::net::TcpStream;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time;
 
@@ -13,7 +13,7 @@ use std::time;
 pub enum Message {
     Pingresp,
     Connack,
-    Suback,
+    Suback(Vec<u8>),
 }
 
 impl fmt::Debug for Message {
@@ -21,7 +21,7 @@ impl fmt::Debug for Message {
         match self {
             Self::Pingresp => write!(f, "PINGRESP"),
             Self::Connack => write!(f, "CONNACK"),
-            Self::Suback => write!(f, "SUBACK"),
+            Self::Suback(_) => write!(f, "SUBACK"),
         }
     }
 }
@@ -41,7 +41,7 @@ pub struct Client {
     password: Vec<u8>,
     connected: Option<ConnectedClient>,
     keep_alive_secs: u8,
-    pending_subscribe_ids: Vec<u8>,
+    pending_subscribe_ids: Arc<Mutex<Vec<u8>>>,
     next_message_id: u8,
 }
 
@@ -68,11 +68,12 @@ impl Client {
             password: String::from(password).into_bytes(),
             connected: None,
             keep_alive_secs,
-            pending_subscribe_ids: Vec::new(),
+            pending_subscribe_ids: Arc::new(Mutex::new(Vec::new())),
             next_message_id: 1,
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn make_connect(&self) -> Vec<u8> {
         let client_id_len = self.client_id.len() as u8;
 
@@ -119,6 +120,7 @@ impl Client {
         connect_msg
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn make_subscribe(&mut self, topic: &str) -> Vec<u8> {
         let topic_len = topic.len();
         if topic_len > 127 {
@@ -192,6 +194,8 @@ impl Client {
             }
         });
 
+        let pending_subscribe_ids = Arc::clone(&self.pending_subscribe_ids);
+
         let i_stream_thread = thread::spawn(move || loop {
             let mut buf = [0; 127];
             if i_stream.read(&mut buf[..2]).unwrap() == 0 {
@@ -204,7 +208,12 @@ impl Client {
             match parse_message(&buf[..len]) {
                 Ok(message) => match message {
                     Message::Pingresp => println!("Pinged"),
-                    Message::Suback => println!("Received {:?} for {}", message, buf[3]),
+                    Message::Suback(msg) => {
+                        let mut pending_subscribe_ids = pending_subscribe_ids
+                            .lock()
+                            .expect("Error locking on subscribe IDs");
+                        handle_suback(&msg, &mut pending_subscribe_ids);
+                    }
                     _ => eprintln!("Unexpected message type: {:?}", message),
                 },
                 Err(e) => eprintln!("Error parsing message: {}", e),
@@ -243,7 +252,10 @@ impl Client {
             None => bail!("Client not connected"),
         };
 
-        self.pending_subscribe_ids.push(sub_msg[3]);
+        self.pending_subscribe_ids
+            .lock()
+            .expect("Error locking on pending subscribe IDs")
+            .push(sub_msg[3]);
 
         tx.send(sub_msg)?;
 
@@ -271,7 +283,7 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
             }
             Ok(Message::Connack)
         }
-        9 => Ok(Message::Suback),
+        9 => Ok(Message::Suback(v.to_vec())),
         13 => {
             if content != PINGRESP {
                 bail!("Error in PINGRESP, expected [12, 0], got {:?}", &content);
@@ -283,6 +295,15 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
             &content[0] >> 4,
             &content
         ),
+    }
+}
+
+fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
+    println!("Suback {}", suback[3]);
+    if let Some(pos) = pending_subscribe_ids.iter().position(|&x| x == suback[3]) {
+        pending_subscribe_ids.remove(pos);
+    } else {
+        eprintln!("Received suback for unknown ID {}", suback[3]);
     }
 }
 
