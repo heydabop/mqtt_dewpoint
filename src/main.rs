@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut client = mqtt::Client::new(client_id, username, password, 60);
     client.connect(broker_addr)?;
 
-    client.subscribe("test/topic").unwrap();
+    client.subscribe("zigbee2mqtt/tempSensor").unwrap();
 
     loop {
         thread::sleep(time::Duration::from_secs(300));

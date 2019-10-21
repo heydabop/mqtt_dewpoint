@@ -13,6 +13,7 @@ use std::time;
 pub enum Message {
     Pingresp,
     Connack,
+    Publish(Vec<u8>),
     Suback(Vec<u8>),
 }
 
@@ -21,7 +22,8 @@ impl fmt::Debug for Message {
         match self {
             Self::Pingresp => write!(f, "PINGRESP"),
             Self::Connack => write!(f, "CONNACK"),
-            Self::Suback(_) => write!(f, "SUBACK"),
+            Self::Publish(_) => write!(f, "PUBLISH"),
+            Self::Suback(msg) => write!(f, "SUBACK {}", msg[3]),
         }
     }
 }
@@ -186,6 +188,7 @@ impl Client {
 
         let (tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
         let o_tx = tx.clone();
+        let i_tx = tx.clone();
 
         let o_stream_thread = thread::spawn(move || {
             while let Ok(msg) = o_rx.recv() {
@@ -214,6 +217,14 @@ impl Client {
                             .expect("Error locking on subscribe IDs");
                         handle_suback(&msg, &mut pending_subscribe_ids);
                     }
+                    Message::Publish(msg) => match handle_publish(&msg) {
+                        Ok(puback) => {
+                            i_tx.send(puback).unwrap();
+                        }
+                        Err(err) => {
+                            eprintln!("Error handling puback: {}", err);
+                        }
+                    },
                     _ => eprintln!("Unexpected message type: {:?}", message),
                 },
                 Err(e) => eprintln!("Error parsing message: {}", e),
@@ -283,6 +294,7 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
             }
             Ok(Message::Connack)
         }
+        3 => Ok(Message::Publish(v.to_vec())),
         9 => Ok(Message::Suback(v.to_vec())),
         13 => {
             if content != PINGRESP {
@@ -305,6 +317,35 @@ fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
     } else {
         eprintln!("Received suback for unknown ID {}", suback[3]);
     }
+}
+
+fn handle_publish(publish: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let qos = match publish[0] & 6 {
+        0 => 0,
+        2 => 1,
+        4 => bail!("Can't handle PUBLISH QoS 2"),
+        _ => bail!("Unexpected QoS value {}", publish[0] & 0x0F),
+    };
+    let len = publish[1];
+    if len >= 127 {
+        bail!("Can't handle publish lengths of 127 or greater");
+    }
+    if len == 0 {
+        println!("Empty publish");
+        return Ok(vec![]);
+    }
+    let topic_len = ((u16::from(publish[2]) << 8) + u16::from(publish[3])) as usize;
+    let topic = String::from_utf8(publish[4..topic_len + 4].to_vec())?;
+    println!("Topic {} {:?}", topic, publish[topic_len + 6..].to_vec());
+
+    if qos == 1 {
+        return Ok(make_puback(&publish[topic_len + 4..topic_len + 6]));
+    }
+    Ok(vec![])
+}
+
+fn make_puback(msg_id: &[u8]) -> Vec<u8> {
+    vec![0x40, 2, msg_id[0], msg_id[1]]
 }
 
 #[cfg(test)]
@@ -356,5 +397,24 @@ mod test {
     fn parse_invalid() {
         assert!(parse_message(&[PINGRESP[0]]).is_err());
         assert!(parse_message(&[0, 1, 1]).is_err());
+    }
+
+    #[test]
+    fn puback_gen() {
+        assert_eq!(make_puback(&[0, 27]), vec![0x40, 2, 0, 27]);
+        assert_eq!(make_puback(&[12, 14]), vec![0x40, 2, 12, 14]);
+    }
+
+    #[test]
+    fn publish() {
+        assert_eq!(
+            handle_publish(&[0x32, 7, 0, 3, b'a', b'/', b'b', 0, 27]).unwrap(),
+            vec![0x40, 2, 0, 27]
+        );
+        assert_eq!(
+            handle_publish(&[0x30, 7, 0, 3, b'a', b'/', b'b', 0, 27]).unwrap(),
+            vec![]
+        );
+        assert!(handle_publish(&[0x34, 7, 0, 3, b'a', b'/', b'b', 0, 27]).is_err())
     }
 }
