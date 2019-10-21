@@ -1,8 +1,11 @@
 use std::error::Error;
+use std::process;
 use std::thread;
 use std::time;
 
 mod mqtt;
+
+extern crate ctrlc;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // config init
@@ -40,6 +43,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     client.connect(broker_addr)?;
 
     client.subscribe("zigbee2mqtt/tempSensor").unwrap();
+
+    ctrlc::set_handler(move || {
+        client.disconnect();
+        process::exit(0);
+    })
+    .expect("Error setting Ctrl-C handler");
 
     loop {
         thread::sleep(time::Duration::from_secs(300));

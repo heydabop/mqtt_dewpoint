@@ -272,9 +272,20 @@ impl Client {
 
         Ok(())
     }
+
+    pub fn disconnect(&self) {
+        println!("Disconnecting...");
+        self.connected
+            .as_ref()
+            .expect("Attempt to disconnect while not connected")
+            .tx
+            .send(DISCONNECT.to_vec())
+            .unwrap();
+    }
 }
 
 pub const CONNACK: [u8; 4] = [0x20, 2, 0, 0];
+pub const DISCONNECT: [u8; 2] = [0xE0, 0];
 pub const PINGREQ: [u8; 2] = [0xC0, 0];
 pub const PINGRESP: [u8; 2] = [0xD0, 0];
 
