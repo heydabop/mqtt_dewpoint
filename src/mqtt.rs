@@ -426,13 +426,12 @@ pub fn make_publish(topic: &str, payload: &str) -> Vec<u8> {
         panic!("Topic length must be less than 127 chars");
     }
     let len = topic_len + payload.len() + 2;
-    if len > 125 {
-        panic!("Topic plus payload length must be less than 125 chars");
-    }
     let topic_len = topic_len as u8;
-    let len = len as u8;
+    let len_bytes = encode_length(len);
 
-    let mut msg = vec![0x30, len, 0, topic_len];
+    let mut msg = vec![0x30];
+    msg.extend_from_slice(&len_bytes);
+    msg.extend_from_slice(&[0, topic_len]);
     msg.extend_from_slice(&String::from(topic).into_bytes());
     msg.extend_from_slice(&String::from(payload).into_bytes());
 
@@ -441,6 +440,20 @@ pub fn make_publish(topic: &str, payload: &str) -> Vec<u8> {
 
 fn make_puback(msg_id: &[u8]) -> Vec<u8> {
     vec![0x40, 2, msg_id[0], msg_id[1]]
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn encode_length(mut length: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    while length > 0 {
+        let mut byte = length % 128;
+        length /= 128;
+        if length > 0 {
+            byte |= 0x80;
+        }
+        bytes.push(byte as u8);
+    }
+    bytes
 }
 
 #[cfg(test)]
@@ -540,5 +553,16 @@ mod test {
         };
 
         assert!(parse_publish(&[0x34, 7, 0, 3, b'a', b'/', b'b', 0, 27]).is_err())
+    }
+
+    #[test]
+    fn length() {
+        assert_eq!(encode_length(16), vec![16]);
+        assert_eq!(encode_length(97), vec![97]);
+        assert_eq!(encode_length(127), vec![127]);
+        assert_eq!(encode_length(128), vec![0x80, 1]);
+        assert_eq!(encode_length(321), vec![0xC1, 2]);
+        assert_eq!(encode_length(16383), vec![0xFF, 0x7F]);
+        assert_eq!(encode_length(16384), vec![0x80, 0x80, 1]);
     }
 }
