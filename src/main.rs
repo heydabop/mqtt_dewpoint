@@ -1,12 +1,12 @@
+use std::error::Error;
 use std::io::prelude::*;
-use std::net::TcpStream;
 use std::sync::mpsc;
 use std::thread;
 use std::time;
 
 mod mqtt;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn Error>> {
     // config init
     let filename: &str;
 
@@ -38,32 +38,15 @@ fn main() -> std::io::Result<()> {
         panic!("Password too long");
     }
 
-    // TCP init
+    let mut client = mqtt::Client::new(client_id, username, password, 60);
+    client.connect(broker_addr)?;
 
-    let mut stream = TcpStream::connect(broker_addr)?;
-    stream.set_read_timeout(Some(time::Duration::from_secs(120)))?;
-    stream.set_nodelay(true)?;
-
-    // MQTT CONNECT
-
-    println!("Connecting...");
-
-    stream.write_all(&mqtt::make_connect(client_id, username, password)[..])?;
-    stream.flush()?;
-
-    // MQTT CONNACK
-
-    let mut buf = [0; 4];
-    stream.read_exact(&mut buf)?;
-    let connack = mqtt::parse_message(&buf).unwrap();
-    match connack {
-        mqtt::Message::Connack => (),
-        _ => panic!("Expected {:?}, got {:?}", mqtt::Message::Connack, connack),
+    let mut o_stream = match client.stream {
+        Some(s) => s.try_clone()?,
+        None => panic!("Stream invalid after connect"),
     };
 
-    println!("Connected!");
-
-    let mut o_stream = stream.try_clone()?;
+    let mut i_stream = o_stream.try_clone()?;
 
     let (o_tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
 
@@ -76,12 +59,12 @@ fn main() -> std::io::Result<()> {
 
     let i_stream_thread = thread::spawn(move || loop {
         let mut buf = [0; 127];
-        if stream.read(&mut buf[..2]).unwrap() == 0 {
+        if i_stream.read(&mut buf[..2]).unwrap() == 0 {
             break;
         }
         let len = (buf[1] + 2) as usize;
         if len > 0 {
-            stream.read_exact(&mut buf[2..len]).unwrap();
+            i_stream.read_exact(&mut buf[2..len]).unwrap();
         }
         match mqtt::parse_message(&buf[..len]) {
             Ok(message) => {
@@ -97,11 +80,11 @@ fn main() -> std::io::Result<()> {
 
     let ping_tx = mpsc::Sender::clone(&o_tx);
     let ping_thread = thread::spawn(move || {
-        let one_min = time::Duration::from_secs(60);
+        let interval = time::Duration::from_secs(30);
         loop {
             println!("Pinging...");
             ping_tx.send(mqtt::PINGREQ.to_vec()).unwrap();
-            thread::sleep(one_min);
+            thread::sleep(interval);
         }
     });
 

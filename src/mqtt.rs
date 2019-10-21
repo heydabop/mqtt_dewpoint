@@ -1,6 +1,9 @@
 use simple_error::bail;
 use std::error::Error;
 use std::fmt;
+use std::io::prelude::*;
+use std::net::TcpStream;
+use std::time;
 
 // http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/MQTT_V3.1_Protocol_Specific.pdf
 
@@ -16,6 +19,126 @@ impl fmt::Debug for Message {
             Self::Pingresp => write!(f, "PINGRESP"),
             Self::Connack => write!(f, "CONNACK"),
         }
+    }
+}
+
+pub struct Client {
+    client_id: Vec<u8>,
+    username: Vec<u8>,
+    password: Vec<u8>,
+    pub stream: Option<TcpStream>,
+    keep_alive_secs: u8,
+}
+
+impl Client {
+    pub fn new(client_id: &str, username: &str, password: &str, keep_alive_secs: u8) -> Self {
+        let client_id_len = client_id.len();
+        if client_id_len < 1 || client_id_len > 23 {
+            panic!("Client ID must be between 1 and 23 characters in length");
+        }
+
+        let username_len = username.len();
+        if username_len < 1 || username_len > 12 {
+            panic!("Username should be between 1 and 23 characters in length");
+        }
+
+        let password_len = password.len();
+        if password_len < 1 || password_len > 12 {
+            panic!("Password should be between 1 and 23 characters in length");
+        }
+
+        Self {
+            client_id: String::from(client_id).into_bytes(),
+            username: String::from(username).into_bytes(),
+            password: String::from(password).into_bytes(),
+            stream: None,
+            keep_alive_secs,
+        }
+    }
+
+    fn make_connect(&self) -> Vec<u8> {
+        let client_id_len = self.client_id.len() as u8;
+
+        let username_len = self.username.len() as u8;
+
+        let password_len = self.password.len() as u8;
+
+        let len = 20 + client_id_len + username_len + password_len;
+
+        if len > 127 {
+            panic!("We don't support sending large messages yet");
+        }
+
+        let mut connect_msg = Vec::<u8>::with_capacity(len as usize);
+        connect_msg.extend_from_slice(&[
+            0x10,    // CONNECT
+            len - 2, // message length (-2 for first 2 fixed bytes)
+            0,       // protocol name len
+            6,       // protocol name len
+            b'M',    // protocol name
+            b'Q',
+            b'I',
+            b's',
+            b'd',
+            b'p',
+            3,                    // protocol version
+            0xC2,                 // connect flags (username, password, clean session)
+            0,                    // keep alive
+            self.keep_alive_secs, // keep alive 60 seconds
+            0,                    // client ID len
+            client_id_len,        // client ID len
+        ]);
+
+        connect_msg.extend_from_slice(&self.client_id[..]); // client_id
+
+        // no will topic or will message
+
+        connect_msg.extend_from_slice(&[0, username_len]); // username length
+        connect_msg.extend_from_slice(&self.username[..]); // username
+
+        connect_msg.extend_from_slice(&[0, password_len]); // password length
+        connect_msg.extend_from_slice(&self.password[..]); // password
+
+        connect_msg
+    }
+
+    pub fn connect(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
+        let msg = self.make_connect();
+
+        // TCP init
+
+        let mut stream = TcpStream::connect(addr)?;
+        stream.set_read_timeout(Some(time::Duration::from_secs(
+            u64::from(self.keep_alive_secs) * 2,
+        )))?;
+        stream.set_nodelay(true)?;
+
+        // CONNECT
+
+        println!("Connecting...");
+
+        stream.write_all(&msg[..])?;
+        stream.flush()?;
+
+        // CONNACK
+
+        let mut buf = [0; 4];
+        stream.read_exact(&mut buf)?;
+        let connack = parse_message(&buf).unwrap();
+        match connack {
+            Message::Connack => (),
+            _ => bail!(
+                "Expected {:?} from server, got {:?}",
+                Message::Connack,
+                connack
+            ),
+        };
+
+        println!("Connected!");
+
+        self.stream = Some(stream);
+
+        Ok(())
     }
 }
 
@@ -53,78 +176,15 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
     }
 }
 
-pub fn make_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
-    let client_id_len = client_id.len();
-    if client_id_len < 1 || client_id_len > 23 {
-        panic!("Client ID must be between 1 and 23 characters in length");
-    }
-    let client_id_len = client_id_len as u8;
-
-    let username_len = username.len();
-    if username_len < 1 || username_len > 12 {
-        panic!("Username should be between 1 and 23 characters in length");
-    }
-    let username_len = username_len as u8;
-
-    let password_len = password.len();
-    if password_len < 1 || password_len > 12 {
-        panic!("Password should be between 1 and 23 characters in length");
-    }
-    let password_len = password_len as u8;
-
-    let len = 20 + client_id_len + username_len + password_len;
-
-    if len > 127 {
-        panic!("We don't support sending large messages yet");
-    }
-
-    let mut connect_msg = Vec::<u8>::with_capacity(len as usize);
-    connect_msg.push(0x10); // CONNECT
-    connect_msg.push((len - 2) as u8); // message length (-2 for first 2 fixed bytes)
-    connect_msg.push(0); // protocol name len
-    connect_msg.push(6); // protocol name len
-    for b in "MQIsdp".chars() {
-        //protocol name
-        connect_msg.push(b as u8);
-    }
-    connect_msg.push(3); // protocol version
-    connect_msg.push(0xC2); // connect flags (username, password, clean session)
-    connect_msg.push(0); // keep alive
-    connect_msg.push(60); // keep alive 60 seconds
-
-    connect_msg.push(0); // client ID len
-    connect_msg.push(client_id_len); // client ID len
-    for b in client_id.chars() {
-        // client ID
-        connect_msg.push(b as u8);
-    }
-    // no will topic or will message
-
-    connect_msg.push(0); // username length
-    connect_msg.push(username_len); // username length
-    for b in username.chars() {
-        // username
-        connect_msg.push(b as u8);
-    }
-
-    connect_msg.push(0); // password length
-    connect_msg.push(password_len); // passowrd length
-    for b in password.chars() {
-        // password
-        connect_msg.push(b as u8);
-    }
-
-    connect_msg
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn short_connect() {
+        let client = Client::new("iden", "username", "password", 15);
         assert_eq!(
-            make_connect("iden", "username", "password"),
+            client.make_connect(),
             vec![
                 16, 38, 0, 6, 77, 81, 73, 115, 100, 112, 3, 194, 0, 15, 0, 4, 105, 100, 101, 110,
                 0, 8, 117, 115, 101, 114, 110, 97, 109, 101, 0, 8, 112, 97, 115, 115, 119, 111,
