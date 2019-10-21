@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::error::Error;
 use std::process;
 use std::thread;
@@ -6,6 +7,9 @@ use std::time;
 mod mqtt;
 
 extern crate ctrlc;
+
+const A: f64 = 17.625;
+const B: f64 = 243.04;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // config init
@@ -42,7 +46,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut client = mqtt::Client::new(client_id, username, password, 60);
     client.connect(broker_addr)?;
 
-    client.subscribe("zigbee2mqtt/tempSensor").unwrap();
+    client
+        .subscribe("zigbee2mqtt/tempSensor", parse_payload)
+        .unwrap();
 
     ctrlc::set_handler(move || {
         client.disconnect();
@@ -56,4 +62,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     #[allow(unreachable_code)]
     Ok(())
+}
+
+fn parse_payload(payload: Vec<u8>) {
+    println!("Payload: {:?}", payload);
+    let s = String::from_utf8(payload).expect("Error generating string from payload");
+    println!("Payload str: {}", s);
+    let r: SensorRecord = serde_json::from_str(&s).unwrap();
+    println!("Temp: {} - Hum: {}", r.temperature, r.humidity);
+    let rh = r.humidity / 100.0;
+    let t = r.temperature;
+    let c = (A * t) / (B + t);
+    let ln_rh = rh.ln();
+    let dewpoint = (B * (ln_rh + c)) / (A - ln_rh - c);
+    println!("Dewpoint: {}", dewpoint);
+}
+
+#[derive(Deserialize)]
+struct SensorRecord {
+    temperature: f64,
+    humidity: f64,
 }

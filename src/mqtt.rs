@@ -1,4 +1,5 @@
 use simple_error::bail;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::io::prelude::*;
@@ -13,7 +14,7 @@ use std::time;
 pub enum Message {
     Pingresp,
     Connack,
-    Publish(Vec<u8>),
+    Publish(String, Vec<u8>),
     Suback(Vec<u8>),
 }
 
@@ -22,11 +23,13 @@ impl fmt::Debug for Message {
         match self {
             Self::Pingresp => write!(f, "PINGRESP"),
             Self::Connack => write!(f, "CONNACK"),
-            Self::Publish(_) => write!(f, "PUBLISH"),
+            Self::Publish(topic, _) => write!(f, "PUBLISH {}", topic),
             Self::Suback(msg) => write!(f, "SUBACK {}", msg[3]),
         }
     }
 }
+
+type PublishHandler = fn(Vec<u8>) -> ();
 
 #[allow(dead_code)]
 struct ConnectedClient {
@@ -45,6 +48,7 @@ pub struct Client {
     keep_alive_secs: u8,
     pending_subscribe_ids: Arc<Mutex<Vec<u8>>>,
     next_message_id: u8,
+    publish_functions: Arc<Mutex<HashMap<String, PublishHandler>>>,
 }
 
 impl Client {
@@ -72,6 +76,7 @@ impl Client {
             keep_alive_secs,
             pending_subscribe_ids: Arc::new(Mutex::new(Vec::new())),
             next_message_id: 1,
+            publish_functions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -198,6 +203,7 @@ impl Client {
         });
 
         let pending_subscribe_ids = Arc::clone(&self.pending_subscribe_ids);
+        let publish_functions = Arc::clone(&self.publish_functions);
 
         let i_stream_thread = thread::spawn(move || loop {
             let mut buf = [0; 127];
@@ -217,14 +223,20 @@ impl Client {
                             .expect("Error locking on subscribe IDs");
                         handle_suback(&msg, &mut pending_subscribe_ids);
                     }
-                    Message::Publish(msg) => match handle_publish(&msg) {
-                        Ok(puback) => {
-                            i_tx.send(puback).unwrap();
+                    Message::Publish(topic, msg) => {
+                        let publish_functions = publish_functions
+                            .lock()
+                            .expect("Error locking on publish functions");
+                        let handler = publish_functions.get(&topic);
+                        match handle_publish(&msg, handler) {
+                            Ok(puback) => {
+                                i_tx.send(puback).unwrap();
+                            }
+                            Err(err) => {
+                                eprintln!("Error handling puback: {}", err);
+                            }
                         }
-                        Err(err) => {
-                            eprintln!("Error handling puback: {}", err);
-                        }
-                    },
+                    }
                     _ => eprintln!("Unexpected message type: {:?}", message),
                 },
                 Err(e) => eprintln!("Error parsing message: {}", e),
@@ -253,10 +265,15 @@ impl Client {
         Ok(())
     }
 
-    pub fn subscribe(&mut self, topic: &str) -> Result<(), Box<dyn Error>> {
+    pub fn subscribe(&mut self, topic: &str, f: PublishHandler) -> Result<(), Box<dyn Error>> {
         let sub_msg = self.make_subscribe(topic);
 
         println!("Subscribing...");
+
+        self.publish_functions
+            .lock()
+            .expect("Error locking on publish functions")
+            .insert(String::from(topic), f);
 
         let tx = match self.connected.as_ref() {
             Some(c) => &c.tx,
@@ -289,7 +306,7 @@ pub const DISCONNECT: [u8; 2] = [0xE0, 0];
 pub const PINGREQ: [u8; 2] = [0xC0, 0];
 pub const PINGRESP: [u8; 2] = [0xD0, 0];
 
-pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
+fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
     if v.len() < 2 {
         bail!("Message too short to be valid");
     }
@@ -305,7 +322,7 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
             }
             Ok(Message::Connack)
         }
-        3 => Ok(Message::Publish(v.to_vec())),
+        3 => parse_publish(v),
         9 => Ok(Message::Suback(v.to_vec())),
         13 => {
             if content != PINGRESP {
@@ -321,6 +338,21 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
     }
 }
 
+fn parse_publish(publish: &[u8]) -> Result<Message, Box<dyn Error>> {
+    let len = publish[1];
+    if len >= 127 {
+        bail!("Can't handle publish lengths of 127 or greater");
+    }
+    if len == 0 {
+        println!("Empty publish");
+        return Ok(Message::Publish(String::from(""), publish.to_vec()));
+    }
+    let topic_len = ((u16::from(publish[2]) << 8) + u16::from(publish[3])) as usize;
+    let topic = String::from_utf8(publish[4..topic_len + 4].to_vec())?;
+
+    Ok(Message::Publish(topic, publish.to_vec()))
+}
+
 fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
     println!("Suback {}", suback[3]);
     if let Some(pos) = pending_subscribe_ids.iter().position(|&x| x == suback[3]) {
@@ -330,7 +362,7 @@ fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
     }
 }
 
-fn handle_publish(publish: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+fn handle_publish(publish: &[u8], f: Option<&PublishHandler>) -> Result<Vec<u8>, Box<dyn Error>> {
     let qos = match publish[0] & 6 {
         0 => 0,
         2 => 1,
@@ -347,7 +379,18 @@ fn handle_publish(publish: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     }
     let topic_len = ((u16::from(publish[2]) << 8) + u16::from(publish[3])) as usize;
     let topic = String::from_utf8(publish[4..topic_len + 4].to_vec())?;
-    println!("Topic {} {:?}", topic, publish[topic_len + 6..].to_vec());
+
+    println!("Publish topic {}", topic);
+
+    let mut payload_offset = topic_len + 4;
+    if qos == 1 {
+        payload_offset += 2; // message ID after topic
+    }
+    let payload = publish[payload_offset..].to_vec();
+
+    if let Some(f) = f {
+        f(payload);
+    }
 
     if qos == 1 {
         return Ok(make_puback(&publish[topic_len + 4..topic_len + 6]));
@@ -419,13 +462,13 @@ mod test {
     #[test]
     fn publish() {
         assert_eq!(
-            handle_publish(&[0x32, 7, 0, 3, b'a', b'/', b'b', 0, 27]).unwrap(),
+            handle_publish(&[0x32, 7, 0, 3, b'a', b'/', b'b', 0, 27], None).unwrap(),
             vec![0x40, 2, 0, 27]
         );
         assert_eq!(
-            handle_publish(&[0x30, 7, 0, 3, b'a', b'/', b'b', 0, 27]).unwrap(),
-            vec![]
+            handle_publish(&[0x30, 7, 0, 3, b'a', b'/', b'b', 0, 27], None).unwrap(),
+            Vec::<u8>::new()
         );
-        assert!(handle_publish(&[0x34, 7, 0, 3, b'a', b'/', b'b', 0, 27]).is_err())
+        assert!(handle_publish(&[0x34, 7, 0, 3, b'a', b'/', b'b', 0, 27], None).is_err())
     }
 }
