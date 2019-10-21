@@ -256,7 +256,7 @@ impl Client {
         let ping_tx = o_tx.clone();
         let keep_alive_secs = self.keep_alive_secs;
         let ping_thread = thread::spawn(move || {
-            let interval = time::Duration::from_secs(u64::from(keep_alive_secs) / 2);
+            let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
             loop {
                 ping_tx.send(PINGREQ.to_vec()).unwrap();
                 thread::sleep(interval);
