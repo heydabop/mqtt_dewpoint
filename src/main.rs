@@ -69,13 +69,22 @@ fn parse_payload(payload: Vec<u8>) {
     let s = String::from_utf8(payload).expect("Error generating string from payload");
     println!("Payload str: {}", s);
     let r: SensorRecord = serde_json::from_str(&s).unwrap();
-    println!("Temp: {} - Hum: {}", r.temperature, r.humidity);
+    println!(
+        "Temp: {:.2}\u{b0}C / {:.2}\u{b0}F - Hum: {}%",
+        r.temperature,
+        r.temperature * 1.8 + 32_f64,
+        r.humidity
+    );
     let rh = r.humidity / 100.0;
     let t = r.temperature;
     let c = (A * t) / (B + t);
     let ln_rh = rh.ln();
     let dewpoint = (B * (ln_rh + c)) / (A - ln_rh - c);
-    println!("Dewpoint: {}", dewpoint);
+    println!(
+        "Dewpoint: {:.2}\u{b0}C / {:.2}\u{b0}F",
+        dewpoint,
+        dewpoint * 1.8 + 32_f64
+    );
 }
 
 #[derive(Deserialize)]
