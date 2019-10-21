@@ -3,6 +3,8 @@ use std::error::Error;
 use std::fmt;
 use std::io::prelude::*;
 use std::net::TcpStream;
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
 use std::time;
 
 // http://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/MQTT_V3.1_Protocol_Specific.pdf
@@ -22,11 +24,19 @@ impl fmt::Debug for Message {
     }
 }
 
+struct ConnectedClient {
+    stream: TcpStream,
+    o_tx: mpsc::Sender<Vec<u8>>,
+    o_stream_thread: JoinHandle<()>,
+    i_stream_thread: JoinHandle<()>,
+    ping_thread: JoinHandle<()>,
+}
+
 pub struct Client {
     client_id: Vec<u8>,
     username: Vec<u8>,
     password: Vec<u8>,
-    pub stream: Option<TcpStream>,
+    connected: Option<ConnectedClient>,
     keep_alive_secs: u8,
 }
 
@@ -51,7 +61,7 @@ impl Client {
             client_id: String::from(client_id).into_bytes(),
             username: String::from(username).into_bytes(),
             password: String::from(password).into_bytes(),
-            stream: None,
+            connected: None,
             keep_alive_secs,
         }
     }
@@ -136,7 +146,58 @@ impl Client {
 
         println!("Connected!");
 
-        self.stream = Some(stream);
+        let mut o_stream = stream.try_clone()?;
+
+        let mut i_stream = stream.try_clone()?;
+
+        let (o_tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
+
+        let o_stream_thread = thread::spawn(move || {
+            while let Ok(msg) = o_rx.recv() {
+                o_stream.write_all(&msg[..]).unwrap();
+                o_stream.flush().unwrap();
+            }
+        });
+
+        let i_stream_thread = thread::spawn(move || loop {
+            let mut buf = [0; 127];
+            if i_stream.read(&mut buf[..2]).unwrap() == 0 {
+                break;
+            }
+            let len = (buf[1] + 2) as usize;
+            if len > 0 {
+                i_stream.read_exact(&mut buf[2..len]).unwrap();
+            }
+            match parse_message(&buf[..len]) {
+                Ok(message) => {
+                    if let Message::Pingresp = message {
+                        println!("Pinged.")
+                    } else {
+                        eprintln!("Unexpected message type: {:?}", message)
+                    }
+                }
+                Err(e) => eprintln!("Error parsing message: {}", e),
+            };
+        });
+
+        let ping_tx = o_tx.clone();
+        let keep_alive_secs = self.keep_alive_secs;
+        let ping_thread = thread::spawn(move || {
+            let interval = time::Duration::from_secs(u64::from(keep_alive_secs) / 2);
+            loop {
+                println!("Pinging...");
+                ping_tx.send(PINGREQ.to_vec()).unwrap();
+                thread::sleep(interval);
+            }
+        });
+
+        self.connected = Some(ConnectedClient {
+            stream,
+            o_tx,
+            o_stream_thread,
+            i_stream_thread,
+            ping_thread,
+        });
 
         Ok(())
     }
