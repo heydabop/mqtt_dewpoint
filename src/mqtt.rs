@@ -13,6 +13,7 @@ use std::time;
 pub enum Message {
     Pingresp,
     Connack,
+    Suback,
 }
 
 impl fmt::Debug for Message {
@@ -20,13 +21,15 @@ impl fmt::Debug for Message {
         match self {
             Self::Pingresp => write!(f, "PINGRESP"),
             Self::Connack => write!(f, "CONNACK"),
+            Self::Suback => write!(f, "SUBACK"),
         }
     }
 }
 
+#[allow(dead_code)]
 struct ConnectedClient {
     stream: TcpStream,
-    o_tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<Vec<u8>>,
     o_stream_thread: JoinHandle<()>,
     i_stream_thread: JoinHandle<()>,
     ping_thread: JoinHandle<()>,
@@ -38,6 +41,8 @@ pub struct Client {
     password: Vec<u8>,
     connected: Option<ConnectedClient>,
     keep_alive_secs: u8,
+    pending_subscribe_ids: Vec<u8>,
+    next_message_id: u8,
 }
 
 impl Client {
@@ -63,6 +68,8 @@ impl Client {
             password: String::from(password).into_bytes(),
             connected: None,
             keep_alive_secs,
+            pending_subscribe_ids: Vec::new(),
+            next_message_id: 1,
         }
     }
 
@@ -112,6 +119,31 @@ impl Client {
         connect_msg
     }
 
+    fn make_subscribe(&mut self, topic: &str) -> Vec<u8> {
+        let topic_len = topic.len();
+        if topic_len > 127 {
+            panic!("Topic length too long");
+        }
+        let len = topic_len + 5; // 2 bytes for variable header, 2 bytes for topic len, topic, 1 byte for QoS
+
+        let mut subscribe_msg = Vec::<u8>::with_capacity(len + 2); // 2 bytes for fixed header
+        subscribe_msg.extend_from_slice(&[
+            0x82, // 8 - SUBSCRIBE, 2 - QoS 1
+            len as u8,
+            0,                    // message ID
+            self.next_message_id, // message ID
+            0,                    // topic length
+            topic_len as u8,      // topic length
+        ]);
+
+        subscribe_msg.extend_from_slice(&topic.bytes().collect::<Vec<u8>>());
+        subscribe_msg.push(1); // QoS 1
+
+        self.next_message_id += 1;
+
+        subscribe_msg
+    }
+
     pub fn connect(&mut self, addr: &str) -> Result<(), Box<dyn Error>> {
         let msg = self.make_connect();
 
@@ -150,7 +182,8 @@ impl Client {
 
         let mut i_stream = stream.try_clone()?;
 
-        let (o_tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
+        let (tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
+        let o_tx = tx.clone();
 
         let o_stream_thread = thread::spawn(move || {
             while let Ok(msg) = o_rx.recv() {
@@ -169,13 +202,11 @@ impl Client {
                 i_stream.read_exact(&mut buf[2..len]).unwrap();
             }
             match parse_message(&buf[..len]) {
-                Ok(message) => {
-                    if let Message::Pingresp = message {
-                        println!("Pinged.")
-                    } else {
-                        eprintln!("Unexpected message type: {:?}", message)
-                    }
-                }
+                Ok(message) => match message {
+                    Message::Pingresp => println!("Pinged"),
+                    Message::Suback => println!("Received {:?} for {}", message, buf[3]),
+                    _ => eprintln!("Unexpected message type: {:?}", message),
+                },
                 Err(e) => eprintln!("Error parsing message: {}", e),
             };
         });
@@ -193,11 +224,28 @@ impl Client {
 
         self.connected = Some(ConnectedClient {
             stream,
-            o_tx,
+            tx,
             o_stream_thread,
             i_stream_thread,
             ping_thread,
         });
+
+        Ok(())
+    }
+
+    pub fn subscribe(&mut self, topic: &str) -> Result<(), Box<dyn Error>> {
+        let sub_msg = self.make_subscribe(topic);
+
+        println!("Subscribing...");
+
+        let tx = match self.connected.as_ref() {
+            Some(c) => &c.tx,
+            None => bail!("Client not connected"),
+        };
+
+        self.pending_subscribe_ids.push(sub_msg[3]);
+
+        tx.send(sub_msg)?;
 
         Ok(())
     }
@@ -223,6 +271,7 @@ pub fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
             }
             Ok(Message::Connack)
         }
+        9 => Ok(Message::Suback),
         13 => {
             if content != PINGRESP {
                 bail!("Error in PINGRESP, expected [12, 0], got {:?}", &content);
@@ -251,6 +300,15 @@ mod test {
                 0, 8, 117, 115, 101, 114, 110, 97, 109, 101, 0, 8, 112, 97, 115, 115, 119, 111,
                 114, 100
             ]
+        );
+    }
+
+    #[test]
+    fn short_subscribe() {
+        let mut client = Client::new("iden", "username", "password", 15);
+        assert_eq!(
+            client.make_subscribe("test/topic"),
+            vec![130, 15, 0, 1, 0, 10, 116, 101, 115, 116, 47, 116, 111, 112, 105, 99, 1]
         );
     }
 

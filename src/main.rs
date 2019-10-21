@@ -39,9 +39,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut client = mqtt::Client::new(client_id, username, password, 60);
     client.connect(broker_addr)?;
 
+    client.subscribe("test/topic").unwrap();
+
     loop {
         thread::sleep(time::Duration::from_secs(300));
     }
 
+    #[allow(unreachable_code)]
     Ok(())
 }
