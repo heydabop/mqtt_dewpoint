@@ -14,7 +14,12 @@ use std::time;
 pub enum Message {
     Pingresp,
     Connack,
-    Publish(String, Vec<u8>),
+    Publish {
+        id: Vec<u8>,
+        topic: String,
+        qos: u8,
+        payload: Vec<u8>,
+    },
     Suback(Vec<u8>),
 }
 
@@ -23,7 +28,7 @@ impl fmt::Debug for Message {
         match self {
             Self::Pingresp => write!(f, "PINGRESP"),
             Self::Connack => write!(f, "CONNACK"),
-            Self::Publish(topic, _) => write!(f, "PUBLISH {}", topic),
+            Self::Publish { topic, .. } => write!(f, "PUBLISH {}", topic),
             Self::Suback(msg) => write!(f, "SUBACK {}", msg[3]),
         }
     }
@@ -223,12 +228,17 @@ impl Client {
                             .expect("Error locking on subscribe IDs");
                         handle_suback(&msg, &mut pending_subscribe_ids);
                     }
-                    Message::Publish(topic, msg) => {
+                    Message::Publish {
+                        id,
+                        topic,
+                        qos,
+                        payload,
+                    } => {
                         let publish_functions = publish_functions
                             .lock()
                             .expect("Error locking on publish functions");
                         let handler = publish_functions.get(&topic);
-                        match handle_publish(&msg, handler) {
+                        match handle_publish(&id, &topic, qos, payload, handler) {
                             Ok(puback) => {
                                 i_tx.send(puback).unwrap();
                             }
@@ -339,30 +349,6 @@ fn parse_message(v: &[u8]) -> Result<Message, Box<dyn Error>> {
 }
 
 fn parse_publish(publish: &[u8]) -> Result<Message, Box<dyn Error>> {
-    let len = publish[1];
-    if len >= 127 {
-        bail!("Can't handle publish lengths of 127 or greater");
-    }
-    if len == 0 {
-        println!("Empty publish");
-        return Ok(Message::Publish(String::from(""), publish.to_vec()));
-    }
-    let topic_len = ((u16::from(publish[2]) << 8) + u16::from(publish[3])) as usize;
-    let topic = String::from_utf8(publish[4..topic_len + 4].to_vec())?;
-
-    Ok(Message::Publish(topic, publish.to_vec()))
-}
-
-fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
-    println!("Suback {}", suback[3]);
-    if let Some(pos) = pending_subscribe_ids.iter().position(|&x| x == suback[3]) {
-        pending_subscribe_ids.remove(pos);
-    } else {
-        eprintln!("Received suback for unknown ID {}", suback[3]);
-    }
-}
-
-fn handle_publish(publish: &[u8], f: Option<&PublishHandler>) -> Result<Vec<u8>, Box<dyn Error>> {
     let qos = match publish[0] & 6 {
         0 => 0,
         2 => 1,
@@ -374,26 +360,51 @@ fn handle_publish(publish: &[u8], f: Option<&PublishHandler>) -> Result<Vec<u8>,
         bail!("Can't handle publish lengths of 127 or greater");
     }
     if len == 0 {
-        println!("Empty publish");
-        return Ok(vec![]);
+        bail!("Empty publish");
     }
     let topic_len = ((u16::from(publish[2]) << 8) + u16::from(publish[3])) as usize;
     let topic = String::from_utf8(publish[4..topic_len + 4].to_vec())?;
 
-    println!("Publish topic {}", topic);
-
     let mut payload_offset = topic_len + 4;
+    let mut id = Vec::new();
     if qos == 1 {
         payload_offset += 2; // message ID after topic
+        id.extend_from_slice(&publish[topic_len + 4..topic_len + 6]);
     }
     let payload = publish[payload_offset..].to_vec();
+
+    Ok(Message::Publish {
+        id,
+        topic,
+        qos,
+        payload,
+    })
+}
+
+fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
+    println!("Suback {}", suback[3]);
+    if let Some(pos) = pending_subscribe_ids.iter().position(|&x| x == suback[3]) {
+        pending_subscribe_ids.remove(pos);
+    } else {
+        eprintln!("Received suback for unknown ID {}", suback[3]);
+    }
+}
+
+fn handle_publish(
+    id: &[u8],
+    topic: &str,
+    qos: u8,
+    payload: Vec<u8>,
+    f: Option<&PublishHandler>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    println!("Publish topic {}", topic);
 
     if let Some(f) = f {
         f(payload);
     }
 
     if qos == 1 {
-        return Ok(make_puback(&publish[topic_len + 4..topic_len + 6]));
+        return Ok(make_puback(&id));
     }
     Ok(vec![])
 }
@@ -461,14 +472,32 @@ mod test {
 
     #[test]
     fn publish() {
-        assert_eq!(
-            handle_publish(&[0x32, 7, 0, 3, b'a', b'/', b'b', 0, 27], None).unwrap(),
-            vec![0x40, 2, 0, 27]
-        );
-        assert_eq!(
-            handle_publish(&[0x30, 7, 0, 3, b'a', b'/', b'b', 0, 27], None).unwrap(),
-            Vec::<u8>::new()
-        );
-        assert!(handle_publish(&[0x34, 7, 0, 3, b'a', b'/', b'b', 0, 27], None).is_err())
+        match parse_publish(&[0x32, 7, 0, 3, b'a', b'/', b'b', 0, 27]).unwrap() {
+            Message::Publish {
+                id,
+                topic,
+                qos,
+                payload,
+            } => assert_eq!(
+                handle_publish(&id, &topic, qos, payload, None).unwrap(),
+                vec![0x40, 2, 0, 27]
+            ),
+            _ => panic!("Received non-publish from parse"),
+        };
+
+        match parse_publish(&[0x30, 7, 0, 3, b'a', b'/', b'b', 0, 27]).unwrap() {
+            Message::Publish {
+                id,
+                topic,
+                qos,
+                payload,
+            } => assert_eq!(
+                handle_publish(&id, &topic, qos, payload, None).unwrap(),
+                Vec::<u8>::new()
+            ),
+            _ => panic!("Received non-publish from parse"),
+        };
+
+        assert!(parse_publish(&[0x34, 7, 0, 3, b'a', b'/', b'b', 0, 27]).is_err())
     }
 }
