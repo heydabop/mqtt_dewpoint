@@ -47,8 +47,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     client.connect(broker_addr)?;
 
     client
-        .subscribe("zigbee2mqtt/tempSensor", parse_payload)
+        .subscribe("zigbee2mqtt/tempSensor", calculate_dewpoint)
         .unwrap();
+
+    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state"}"#);
 
     ctrlc::set_handler(move || {
         client.disconnect();
@@ -64,7 +66,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn parse_payload(payload: Vec<u8>) {
+fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
     let r: SensorRecord = serde_json::from_str(
         &String::from_utf8(payload).expect("Error generating string from payload"),
     )
@@ -89,6 +91,11 @@ fn parse_payload(payload: Vec<u8>) {
         dewpoint,
         dewpoint * 1.8 + 32_f64
     );
+
+    Some(mqtt::make_publish(
+        "homeassistant/sensor/dewpoint/state",
+        &format!(r#"{{"dewpoint": {:.2}}}"#, dewpoint),
+    ))
 }
 
 #[derive(Deserialize)]

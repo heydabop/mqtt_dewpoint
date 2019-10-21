@@ -34,7 +34,7 @@ impl fmt::Debug for Message {
     }
 }
 
-type PublishHandler = fn(Vec<u8>) -> ();
+type PublishHandler = fn(Vec<u8>) -> Option<Vec<u8>>;
 
 #[allow(dead_code)]
 struct ConnectedClient {
@@ -238,13 +238,9 @@ impl Client {
                             .lock()
                             .expect("Error locking on publish functions");
                         let handler = publish_functions.get(&topic);
-                        match handle_publish(&id, &topic, qos, payload, handler) {
-                            Ok(puback) => {
-                                i_tx.send(puback).unwrap();
-                            }
-                            Err(err) => {
-                                eprintln!("Error handling puback: {}", err);
-                            }
+                        let mut responses = handle_publish(&id, &topic, qos, payload, handler);
+                        for res in responses.drain(..) {
+                            i_tx.send(res).unwrap();
                         }
                     }
                     _ => eprintln!("Unexpected message type: {:?}", message),
@@ -306,6 +302,17 @@ impl Client {
             .expect("Attempt to disconnect while not connected")
             .tx
             .send(DISCONNECT.to_vec())
+            .unwrap();
+    }
+
+    pub fn publish(&mut self, topic: &str, payload: &str) {
+        let msg = make_publish(topic, payload);
+
+        self.connected
+            .as_ref()
+            .expect("Can't publish before connect")
+            .tx
+            .send(msg)
             .unwrap();
     }
 }
@@ -395,17 +402,41 @@ fn handle_publish(
     qos: u8,
     payload: Vec<u8>,
     f: Option<&PublishHandler>,
-) -> Result<Vec<u8>, Box<dyn Error>> {
+) -> Vec<Vec<u8>> {
     println!("Publish topic {}", topic);
 
-    if let Some(f) = f {
-        f(payload);
+    let mut messages = Vec::new();
+    if qos == 1 {
+        messages.push(make_puback(&id));
     }
 
-    if qos == 1 {
-        return Ok(make_puback(&id));
+    if let Some(f) = f {
+        if let Some(response) = f(payload) {
+            messages.push(response);
+        }
     }
-    Ok(vec![])
+
+    messages
+}
+
+#[allow(clippy::cast_possible_truncation)]
+pub fn make_publish(topic: &str, payload: &str) -> Vec<u8> {
+    let topic_len = topic.len();
+    if topic_len > 127 {
+        panic!("Topic length must be less than 127 chars");
+    }
+    let len = topic_len + payload.len() + 2;
+    if len > 125 {
+        panic!("Topic plus payload length must be less than 125 chars");
+    }
+    let topic_len = topic_len as u8;
+    let len = len as u8;
+
+    let mut msg = vec![0x30, len, 0, topic_len];
+    msg.extend_from_slice(&String::from(topic).into_bytes());
+    msg.extend_from_slice(&String::from(payload).into_bytes());
+
+    msg
 }
 
 fn make_puback(msg_id: &[u8]) -> Vec<u8> {
@@ -435,6 +466,17 @@ mod test {
         assert_eq!(
             client.make_subscribe("test/topic"),
             vec![130, 15, 0, 1, 0, 10, 116, 101, 115, 116, 47, 116, 111, 112, 105, 99, 1]
+        );
+    }
+
+    #[test]
+    fn short_publish() {
+        assert_eq!(
+            make_publish("test/topic", "this is a payload"),
+            vec![
+                0x30, 29, 0, 10, 116, 101, 115, 116, 47, 116, 111, 112, 105, 99, 116, 104, 105,
+                115, 32, 105, 115, 32, 97, 32, 112, 97, 121, 108, 111, 97, 100
+            ]
         );
     }
 
@@ -478,8 +520,8 @@ mod test {
                 qos,
                 payload,
             } => assert_eq!(
-                handle_publish(&id, &topic, qos, payload, None).unwrap(),
-                vec![0x40, 2, 0, 27]
+                handle_publish(&id, &topic, qos, payload, None),
+                vec![vec![0x40, 2, 0, 27]]
             ),
             _ => panic!("Received non-publish from parse"),
         };
@@ -491,8 +533,8 @@ mod test {
                 qos,
                 payload,
             } => assert_eq!(
-                handle_publish(&id, &topic, qos, payload, None).unwrap(),
-                Vec::<u8>::new()
+                handle_publish(&id, &topic, qos, payload, None),
+                Vec::<Vec<u8>>::new()
             ),
             _ => panic!("Received non-publish from parse"),
         };
