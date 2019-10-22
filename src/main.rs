@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .subscribe("zigbee2mqtt/tempSensor", calculate_dewpoint)
         .unwrap();
 
-    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"°F"}"#);
+    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"\u{b0}F"}"#);
 
     let main_thread = thread::current();
 
