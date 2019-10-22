@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 mod mqtt;
@@ -51,16 +53,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"\u{b0}F"}"#);
 
     let main_thread = thread::current();
+    let closing = Arc::new(AtomicBool::new(false));
+    let closing_clone = closing.clone();
 
     ctrlc::set_handler(move || {
-        client.disconnect();
+        closing_clone.store(true, Ordering::SeqCst);
         main_thread.unpark();
     })
     .expect("Error setting Ctrl-C handler");
 
-    println!("Parking main...");
-    thread::park();
-    println!("Quitting");
+    while !closing.load(Ordering::SeqCst) {
+        thread::park();
+    }
+
+    client.disconnect();
 
     Ok(())
 }

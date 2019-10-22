@@ -36,13 +36,9 @@ impl fmt::Debug for Message {
 
 type PublishHandler = fn(Vec<u8>) -> Option<Vec<u8>>;
 
-#[allow(dead_code)]
 struct ConnectedClient {
-    stream: TcpStream,
     tx: mpsc::Sender<Vec<u8>>,
-    o_stream_thread: JoinHandle<()>,
-    i_stream_thread: JoinHandle<()>,
-    ping_thread: JoinHandle<()>,
+    o_stream_thread: Option<JoinHandle<()>>,
 }
 
 pub struct Client {
@@ -204,13 +200,16 @@ impl Client {
             while let Ok(msg) = o_rx.recv() {
                 o_stream.write_all(&msg[..]).unwrap();
                 o_stream.flush().unwrap();
+                if msg == DISCONNECT.to_vec() {
+                    break;
+                }
             }
         });
 
         let pending_subscribe_ids = Arc::clone(&self.pending_subscribe_ids);
         let publish_functions = Arc::clone(&self.publish_functions);
 
-        let i_stream_thread = thread::spawn(move || loop {
+        thread::spawn(move || loop {
             let mut buf = [0; 127];
             if i_stream.read(&mut buf[..2]).unwrap() == 0 {
                 break;
@@ -251,7 +250,7 @@ impl Client {
 
         let ping_tx = o_tx.clone();
         let keep_alive_secs = self.keep_alive_secs;
-        let ping_thread = thread::spawn(move || {
+        thread::spawn(move || {
             let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
             loop {
                 ping_tx.send(PINGREQ.to_vec()).unwrap();
@@ -260,11 +259,8 @@ impl Client {
         });
 
         self.connected = Some(ConnectedClient {
-            stream,
             tx,
-            o_stream_thread,
-            i_stream_thread,
-            ping_thread,
+            o_stream_thread: Some(o_stream_thread),
         });
 
         Ok(())
@@ -295,14 +291,21 @@ impl Client {
         Ok(())
     }
 
-    pub fn disconnect(&self) {
+    pub fn disconnect(&mut self) {
         println!("Disconnecting...");
-        self.connected
-            .as_ref()
-            .expect("Attempt to disconnect while not connected")
-            .tx
-            .send(DISCONNECT.to_vec())
-            .unwrap();
+
+        let connected = self
+            .connected
+            .as_mut()
+            .expect("Attempt to disconnect while not connected");
+
+        connected.tx.send(DISCONNECT.to_vec()).unwrap();
+        connected
+            .o_stream_thread
+            .take()
+            .expect("Error getting ostream thread on connected client")
+            .join()
+            .expect("Error joining ostream thread");
     }
 
     pub fn publish(&mut self, topic: &str, payload: &str) {
