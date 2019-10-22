@@ -1,8 +1,6 @@
 use serde::Deserialize;
 use std::error::Error;
-use std::process;
 use std::thread;
-use std::time;
 
 mod mqtt;
 
@@ -52,17 +50,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"°F"}"#);
 
+    let main_thread = thread::current();
+
     ctrlc::set_handler(move || {
         client.disconnect();
-        process::exit(0);
+        main_thread.unpark();
     })
     .expect("Error setting Ctrl-C handler");
 
-    loop {
-        thread::sleep(time::Duration::from_secs(300));
-    }
+    println!("Parking main...");
+    thread::park();
+    println!("Quitting");
 
-    #[allow(unreachable_code)]
     Ok(())
 }
 
