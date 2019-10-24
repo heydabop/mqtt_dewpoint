@@ -172,6 +172,7 @@ impl Client {
                 o_stream.write_all(&msg[..]).unwrap();
                 o_stream.flush().unwrap();
                 if msg == message::DISCONNECT.to_vec() {
+                    o_stream.shutdown(std::net::Shutdown::Both).unwrap();
                     break;
                 }
             }
@@ -269,9 +270,9 @@ impl Client {
     pub fn disconnect(&mut self) {
         println!("Disconnecting...");
 
-        let connected = self
+        let mut connected = self
             .connected
-            .as_mut()
+            .take()
             .expect("Attempt to disconnect while not connected");
 
         connected.tx.send(message::DISCONNECT.to_vec()).unwrap();
@@ -281,6 +282,7 @@ impl Client {
             .expect("Error getting ostream thread on connected client")
             .join()
             .expect("Error joining ostream thread");
+        drop(connected.tx);
     }
 
     pub fn publish(&mut self, topic: &str, payload: &str) {
