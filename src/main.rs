@@ -100,7 +100,7 @@ fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
 
     Some(mqtt::message::make_publish(
         "homeassistant/sensor/dewpoint/state",
-        &format!("{:.2}", dewpoint_f),
+        &format!("{:.1}", dewpoint_f),
     ))
 }
 
