@@ -1,10 +1,11 @@
+mod mqtt;
+
+use mqtt::client::Client;
 use serde::Deserialize;
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-
-mod mqtt;
 
 extern crate ctrlc;
 
@@ -43,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         panic!("Password too long");
     }
 
-    let mut client = mqtt::Client::new(client_id, username, password, 60);
+    let mut client = Client::new(client_id, username, password, 60);
     client.connect(broker_addr)?;
 
     client
@@ -97,7 +98,7 @@ fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
         dewpoint, dewpoint_f
     );
 
-    Some(mqtt::make_publish(
+    Some(mqtt::message::make_publish(
         "homeassistant/sensor/dewpoint/state",
         &format!("{:.2}", dewpoint_f),
     ))
