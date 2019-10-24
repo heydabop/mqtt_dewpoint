@@ -81,7 +81,7 @@ fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
     println!(
         "Temp: {:.2}\u{b0}C / {:.2}\u{b0}F - Hum: {}%",
         r.temperature,
-        r.temperature * 1.8 + 32_f64,
+        r.temperature.mul_add(1.8, 32_f64),
         r.humidity
     );
 
@@ -91,7 +91,7 @@ fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
     let ln_rh = rh.ln();
 
     let dewpoint = (B * (ln_rh + c)) / (A - ln_rh - c);
-    let dewpoint_f = dewpoint * 1.8 + 32_f64;
+    let dewpoint_f = dewpoint.mul_add(1.8, 32_f64);
 
     println!(
         "Dewpoint: {:.2}\u{b0}C / {:.2}\u{b0}F",
