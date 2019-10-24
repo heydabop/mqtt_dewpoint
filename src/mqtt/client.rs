@@ -165,7 +165,6 @@ impl Client {
         let mut i_stream = stream.try_clone()?;
 
         let (tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
-        let o_tx = tx.clone();
         let i_tx = tx.clone();
 
         let o_stream_thread = thread::spawn(move || {
@@ -220,7 +219,7 @@ impl Client {
             };
         });
 
-        let ping_tx = o_tx.clone();
+        let ping_tx = tx.clone();
         let keep_alive_secs = self.keep_alive_secs;
         thread::spawn(move || {
             let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
@@ -316,7 +315,7 @@ fn handle_publish(
 
     let mut messages = Vec::new();
     if qos == 1 {
-        messages.push(message::make_puback(&id));
+        messages.push(message::make_puback(id));
     }
 
     if let Some(f) = f {
