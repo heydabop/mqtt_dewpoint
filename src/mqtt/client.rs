@@ -42,9 +42,9 @@ impl Client {
         }
 
         Self {
-            client_id: String::from(client_id).into_bytes(),
-            username: String::from(username).into_bytes(),
-            password: String::from(password).into_bytes(),
+            client_id: Vec::from(client_id),
+            username: Vec::from(username),
+            password: Vec::from(password),
             connected: None,
             keep_alive_secs,
             pending_subscribe_ids: Arc::new(Mutex::new(Vec::new())),
@@ -118,7 +118,7 @@ impl Client {
             topic_len as u8,      // topic length
         ]);
 
-        subscribe_msg.extend_from_slice(&topic.bytes().collect::<Vec<u8>>());
+        subscribe_msg.append(&mut Vec::from(topic));
         subscribe_msg.push(1); // QoS 1
 
         self.next_message_id += 1;
@@ -315,7 +315,7 @@ fn handle_publish(
 ) -> Vec<Vec<u8>> {
     println!("Publish topic {}", topic);
 
-    let mut messages = Vec::new();
+    let mut messages = Vec::with_capacity(2);
     if qos == 1 {
         messages.push(message::make_puback(id));
     }

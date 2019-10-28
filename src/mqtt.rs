@@ -7,7 +7,7 @@ type PublishHandler = fn(Vec<u8>) -> Option<Vec<u8>>;
 
 #[allow(clippy::cast_possible_truncation)]
 fn encode_length(mut length: usize) -> Vec<u8> {
-    let mut bytes = Vec::new();
+    let mut bytes = Vec::with_capacity(4);
     while length > 0 {
         let mut byte = length % 128;
         length /= 128;

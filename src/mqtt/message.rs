@@ -104,13 +104,13 @@ pub fn make_publish(topic: &str, payload: &str) -> Vec<u8> {
     }
     let len = topic_len + payload.len() + 2;
     let topic_len = topic_len as u8;
-    let len_bytes = super::encode_length(len);
+    let mut len_bytes = super::encode_length(len);
 
     let mut msg = vec![0x30];
-    msg.extend_from_slice(&len_bytes);
+    msg.append(&mut len_bytes);
     msg.extend_from_slice(&[0, topic_len]);
-    msg.extend_from_slice(&String::from(topic).into_bytes());
-    msg.extend_from_slice(&String::from(payload).into_bytes());
+    msg.append(&mut Vec::from(topic));
+    msg.append(&mut Vec::from(payload));
 
     msg
 }
