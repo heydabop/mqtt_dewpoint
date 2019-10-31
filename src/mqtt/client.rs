@@ -167,68 +167,77 @@ impl Client {
         let (tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
         let i_tx = tx.clone();
 
-        let o_stream_thread = thread::spawn(move || {
-            while let Ok(msg) = o_rx.recv() {
-                o_stream.write_all(&msg[..]).unwrap();
-                o_stream.flush().unwrap();
-                if msg == message::DISCONNECT.to_vec() {
-                    o_stream.shutdown(std::net::Shutdown::Both).unwrap();
-                    break;
+        let o_stream_thread = thread::Builder::new()
+            .name("o_stream".into())
+            .spawn(move || {
+                while let Ok(msg) = o_rx.recv() {
+                    o_stream.write_all(&msg[..]).unwrap();
+                    o_stream.flush().unwrap();
+                    if msg == message::DISCONNECT.to_vec() {
+                        o_stream.shutdown(std::net::Shutdown::Both).unwrap();
+                        break;
+                    }
                 }
-            }
-        });
+            })
+            .expect("Failed to created o_stream thread");
 
         let pending_subscribe_ids = Arc::clone(&self.pending_subscribe_ids);
         let publish_functions = Arc::clone(&self.publish_functions);
 
-        thread::spawn(move || loop {
-            let mut buf = [0; 127];
-            if i_stream.read(&mut buf[..2]).unwrap() == 0 {
-                break;
-            }
-            let len = (buf[1] + 2) as usize;
-            if len > 0 {
-                i_stream.read_exact(&mut buf[2..len]).unwrap();
-            }
-            match message::parse_slice(&buf[..len]) {
-                Ok(message) => match message {
-                    Message::Pingresp => {}
-                    Message::Suback(msg) => {
-                        let mut pending_subscribe_ids = pending_subscribe_ids
-                            .lock()
-                            .expect("Error locking on subscribe IDs");
-                        handle_suback(&msg, &mut pending_subscribe_ids);
-                    }
-                    Message::Publish {
-                        id,
-                        topic,
-                        qos,
-                        payload,
-                    } => {
-                        let publish_functions = publish_functions
-                            .lock()
-                            .expect("Error locking on publish functions");
-                        let handler = publish_functions.get(&topic);
-                        let mut responses = handle_publish(&id, &topic, qos, payload, handler);
-                        for res in responses.drain(..) {
-                            i_tx.send(res).unwrap();
+        thread::Builder::new()
+            .name("i_stream".into())
+            .spawn(move || loop {
+                let mut buf = [0; 127];
+                if i_stream.read(&mut buf[..2]).unwrap() == 0 {
+                    break;
+                }
+                let len = (buf[1] + 2) as usize;
+                if len > 0 {
+                    i_stream.read_exact(&mut buf[2..len]).unwrap();
+                }
+                match message::parse_slice(&buf[..len]) {
+                    Ok(message) => match message {
+                        Message::Pingresp => {}
+                        Message::Suback(msg) => {
+                            let mut pending_subscribe_ids = pending_subscribe_ids
+                                .lock()
+                                .expect("Error locking on subscribe IDs");
+                            handle_suback(&msg, &mut pending_subscribe_ids);
                         }
-                    }
-                    _ => eprintln!("Unexpected message type: {:?}", message),
-                },
-                Err(e) => eprintln!("Error parsing message: {}", e),
-            };
-        });
+                        Message::Publish {
+                            id,
+                            topic,
+                            qos,
+                            payload,
+                        } => {
+                            let publish_functions = publish_functions
+                                .lock()
+                                .expect("Error locking on publish functions");
+                            let handler = publish_functions.get(&topic);
+                            let mut responses = handle_publish(&id, &topic, qos, payload, handler);
+                            for res in responses.drain(..) {
+                                i_tx.send(res).unwrap();
+                            }
+                        }
+                        _ => eprintln!("Unexpected message type: {:?}", message),
+                    },
+                    Err(e) => eprintln!("Error parsing message: {}", e),
+                };
+            })
+            .expect("Failed to create i_stream thread");
 
         let ping_tx = tx.clone();
         let keep_alive_secs = self.keep_alive_secs;
-        thread::spawn(move || {
-            let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
-            loop {
-                ping_tx.send(message::PINGREQ.to_vec()).unwrap();
-                thread::sleep(interval);
-            }
-        });
+        thread::Builder::new()
+            .name("ping".into())
+            .spawn(move || {
+                let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
+                loop {
+                    ping_tx.send(message::PINGREQ.to_vec()).unwrap();
+                    thread::sleep(interval);
+                }
+            })
+            .expect("Failed to create ping thread");
 
         self.connected = Some(ConnectedClient {
             tx,
