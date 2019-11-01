@@ -193,7 +193,10 @@ impl Client {
                 }
                 let len = (buf[1] + 2) as usize;
                 if len > 0 {
-                    i_stream.read_exact(&mut buf[2..len]).unwrap();
+                    if let Some(e) = i_stream.read_exact(&mut buf[2..len]).err() {
+                        eprintln!("Error reading istream {}", e);
+                        continue;
+                    }
                 }
                 match message::parse_slice(&buf[..len]) {
                     Ok(message) => match message {
