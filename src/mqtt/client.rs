@@ -187,18 +187,23 @@ impl Client {
         thread::Builder::new()
             .name("i_stream".into())
             .spawn(move || loop {
-                let mut buf = [0; 127];
-                if i_stream.read(&mut buf[..2]).unwrap() == 0 {
+                let mut header = [0; 5];
+                if i_stream.read(&mut header[..5]).unwrap() == 0 {
                     break;
                 }
-                let len = (buf[1] + 2) as usize;
+                let (len, bytes_read) = super::decode_length(&header);
+
+                let mut buf = Vec::with_capacity(bytes_read + len);
+                buf.extend_from_slice(&header);
+                buf.resize(bytes_read + len, 0);
+
                 if len > 0 {
-                    if let Some(e) = i_stream.read_exact(&mut buf[2..len]).err() {
+                    if let Some(e) = i_stream.read_exact(&mut buf[bytes_read..len]).err() {
                         eprintln!("Error reading istream {}", e);
                         continue;
                     }
                 }
-                match message::parse_slice(&buf[..len]) {
+                match message::parse_slice(&buf) {
                     Ok(message) => match message {
                         Message::Pingresp => {}
                         Message::Suback(msg) => {
