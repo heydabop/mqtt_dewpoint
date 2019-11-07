@@ -2,7 +2,7 @@ use super::message::{self, Message};
 use simple_error::bail;
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::prelude::*;
+use std::io::{self, prelude::*};
 use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -160,91 +160,15 @@ impl Client {
 
         println!("Connected!");
 
-        let mut o_stream = stream.try_clone()?;
+        let (tx, rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
 
-        let mut i_stream = stream.try_clone()?;
+        let o_stream_thread =
+            start_out_thread(stream.try_clone()?, rx).expect("Failed to created o_stream thread");
 
-        let (tx, o_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel();
-        let i_tx = tx.clone();
-
-        let o_stream_thread = thread::Builder::new()
-            .name("o_stream".into())
-            .spawn(move || {
-                while let Ok(msg) = o_rx.recv() {
-                    o_stream.write_all(&msg[..]).unwrap();
-                    o_stream.flush().unwrap();
-                    if msg == message::DISCONNECT.to_vec() {
-                        o_stream.shutdown(std::net::Shutdown::Both).unwrap();
-                        break;
-                    }
-                }
-            })
-            .expect("Failed to created o_stream thread");
-
-        let pending_subscribe_ids = Arc::clone(&self.pending_subscribe_ids);
-        let publish_functions = Arc::clone(&self.publish_functions);
-
-        thread::Builder::new()
-            .name("i_stream".into())
-            .spawn(move || loop {
-                let mut header = [0; 5];
-                if i_stream.read(&mut header[..5]).unwrap() == 0 {
-                    break;
-                }
-                let (len, bytes_read) = super::decode_length(&header);
-
-                let mut buf = Vec::with_capacity(bytes_read + len);
-                buf.extend_from_slice(&header);
-                buf.resize(bytes_read + len, 0);
-
-                if len > 3 {
-                    if let Some(e) = i_stream.read_exact(&mut buf[5..]).err() {
-                        eprintln!("Error reading istream {}", e);
-                        continue;
-                    }
-                }
-                match message::parse_slice(&buf) {
-                    Ok(message) => match message {
-                        Message::Pingresp => {}
-                        Message::Suback(msg) => {
-                            let mut pending_subscribe_ids = pending_subscribe_ids
-                                .lock()
-                                .expect("Error locking on subscribe IDs");
-                            handle_suback(&msg, &mut pending_subscribe_ids);
-                        }
-                        Message::Publish {
-                            id,
-                            topic,
-                            qos,
-                            payload,
-                        } => {
-                            let publish_functions = publish_functions
-                                .lock()
-                                .expect("Error locking on publish functions");
-                            let handler = publish_functions.get(&topic);
-                            let mut responses = handle_publish(&id, &topic, qos, payload, handler);
-                            for res in responses.drain(..) {
-                                i_tx.send(res).unwrap();
-                            }
-                        }
-                        _ => eprintln!("Unexpected message type: {:?}", message),
-                    },
-                    Err(e) => eprintln!("Error parsing message: {}", e),
-                };
-            })
+        self.start_in_thread(stream.try_clone()?, tx.clone())
             .expect("Failed to create i_stream thread");
 
-        let ping_tx = tx.clone();
-        let keep_alive_secs = self.keep_alive_secs;
-        thread::Builder::new()
-            .name("ping".into())
-            .spawn(move || {
-                let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
-                loop {
-                    ping_tx.send(message::PINGREQ.to_vec()).unwrap();
-                    thread::sleep(interval);
-                }
-            })
+        self.start_ping_thread(tx.clone())
             .expect("Failed to create ping thread");
 
         self.connected = Some(ConnectedClient {
@@ -312,6 +236,76 @@ impl Client {
             .send(msg)
             .unwrap();
     }
+
+    fn start_in_thread(
+        &self,
+        mut stream: TcpStream,
+        tx: mpsc::Sender<Vec<u8>>,
+    ) -> io::Result<JoinHandle<()>> {
+        let pending_subscribe_ids = Arc::clone(&self.pending_subscribe_ids);
+        let publish_functions = Arc::clone(&self.publish_functions);
+
+        thread::Builder::new()
+            .name("i_stream".into())
+            .spawn(move || loop {
+                let mut header = [0; 5];
+                if stream.read(&mut header[..5]).unwrap() == 0 {
+                    break;
+                }
+                let (len, bytes_read) = super::decode_length(&header);
+
+                let mut buf = Vec::with_capacity(bytes_read + len);
+                buf.extend_from_slice(&header);
+                buf.resize(bytes_read + len, 0);
+
+                if len > 3 {
+                    if let Some(e) = stream.read_exact(&mut buf[5..]).err() {
+                        eprintln!("Error reading istream {}", e);
+                        continue;
+                    }
+                }
+                match message::parse_slice(&buf) {
+                    Ok(message) => match message {
+                        Message::Pingresp => {}
+                        Message::Suback(msg) => {
+                            let mut pending_subscribe_ids = pending_subscribe_ids
+                                .lock()
+                                .expect("Error locking on subscribe IDs");
+                            handle_suback(&msg, &mut pending_subscribe_ids);
+                        }
+                        Message::Publish {
+                            id,
+                            topic,
+                            qos,
+                            payload,
+                        } => {
+                            let publish_functions = publish_functions
+                                .lock()
+                                .expect("Error locking on publish functions");
+                            let handler = publish_functions.get(&topic);
+                            let mut responses = handle_publish(&id, &topic, qos, payload, handler);
+                            for res in responses.drain(..) {
+                                tx.send(res).unwrap();
+                            }
+                        }
+                        _ => eprintln!("Unexpected message type: {:?}", message),
+                    },
+                    Err(e) => eprintln!("Error parsing message: {}", e),
+                };
+            })
+    }
+
+    fn start_ping_thread(&self, tx: mpsc::Sender<Vec<u8>>) -> io::Result<JoinHandle<()>> {
+        let keep_alive_secs = self.keep_alive_secs;
+
+        thread::Builder::new().name("ping".into()).spawn(move || {
+            let interval = time::Duration::from_secs(u64::from(keep_alive_secs));
+            loop {
+                tx.send(message::PINGREQ.to_vec()).unwrap();
+                thread::sleep(interval);
+            }
+        })
+    }
 }
 
 fn handle_suback(suback: &[u8], pending_subscribe_ids: &mut Vec<u8>) {
@@ -344,6 +338,24 @@ fn handle_publish(
     }
 
     messages
+}
+
+fn start_out_thread(
+    mut stream: TcpStream,
+    rx: mpsc::Receiver<Vec<u8>>,
+) -> io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("o_stream".into())
+        .spawn(move || {
+            while let Ok(msg) = rx.recv() {
+                stream.write_all(&msg[..]).unwrap();
+                stream.flush().unwrap();
+                if msg == message::DISCONNECT.to_vec() {
+                    stream.shutdown(std::net::Shutdown::Both).unwrap();
+                    break;
+                }
+            }
+        })
 }
 
 #[cfg(test)]
