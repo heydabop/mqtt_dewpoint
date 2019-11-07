@@ -197,8 +197,8 @@ impl Client {
                 buf.extend_from_slice(&header);
                 buf.resize(bytes_read + len, 0);
 
-                if len > 0 {
-                    if let Some(e) = i_stream.read_exact(&mut buf[bytes_read..len]).err() {
+                if len > 6 {
+                    if let Some(e) = i_stream.read_exact(&mut buf[6..len]).err() {
                         eprintln!("Error reading istream {}", e);
                         continue;
                     }
