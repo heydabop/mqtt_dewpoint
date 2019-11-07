@@ -31,34 +31,30 @@ impl fmt::Debug for Message {
     }
 }
 
-pub fn parse_slice(v: &[u8]) -> Result<Message, Box<dyn Error>> {
-    if v.len() < 2 {
+pub fn parse_slice(msg: &[u8]) -> Result<Message, Box<dyn Error>> {
+    if msg.len() < 2 {
         bail!("Message too short to be valid");
     }
-    let content = &v[..(v[1] + 2) as usize]; // trim buffer down to specified length
 
-    match content[0] >> 4 {
+    match msg[0] >> 4 {
         2 => {
-            if content != CONNACK {
-                bail!(
-                    "Error in CONNACK, expected [32, 2, 0, 0], got {:?}",
-                    &content
-                );
+            if msg[0..4] != CONNACK {
+                bail!("Error in CONNACK, expected [32, 2, 0, 0], got {:?}", &msg);
             }
             Ok(Message::Connack)
         }
-        3 => parse_publish(v),
-        9 => Ok(Message::Suback(v.to_vec())),
+        3 => parse_publish(msg),
+        9 => Ok(Message::Suback(msg.to_vec())),
         13 => {
-            if content != PINGRESP {
-                bail!("Error in PINGRESP, expected [12, 0], got {:?}", &content);
+            if msg[0..2] != PINGRESP {
+                bail!("Error in PINGRESP, expected [12, 0], got {:?}", &msg);
             }
             Ok(Message::Pingresp)
         }
         _ => bail!(
             "Unrecognized message type {} in message {:?}",
-            &content[0] >> 4,
-            &content
+            &msg[0] >> 4,
+            &msg
         ),
     }
 }
@@ -70,6 +66,7 @@ pub fn parse_publish(publish: &[u8]) -> Result<Message, Box<dyn Error>> {
         4 => bail!("Can't handle PUBLISH QoS 2"),
         _ => bail!("Unexpected QoS value {}", publish[0] & 0x0F),
     };
+
     let (len, offset) = super::decode_length(publish);
     if len == 0 {
         bail!("Empty publish");
