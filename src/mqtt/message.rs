@@ -70,21 +70,18 @@ pub fn parse_publish(publish: &[u8]) -> Result<Message, Box<dyn Error>> {
         4 => bail!("Can't handle PUBLISH QoS 2"),
         _ => bail!("Unexpected QoS value {}", publish[0] & 0x0F),
     };
-    let len = publish[1];
-    if len >= 127 {
-        bail!("Can't handle publish lengths of 127 or greater");
-    }
+    let (len, offset) = super::decode_length(publish);
     if len == 0 {
         bail!("Empty publish");
     }
-    let topic_len = ((u16::from(publish[2]) << 8) + u16::from(publish[3])) as usize;
-    let topic = String::from_utf8(publish[4..topic_len + 4].to_vec())?;
+    let topic_len = ((u16::from(publish[offset]) << 8) + u16::from(publish[offset + 1])) as usize;
+    let topic = String::from_utf8(publish[offset + 2..topic_len + offset + 2].to_vec())?;
 
-    let mut payload_offset = topic_len + 4;
+    let mut payload_offset = topic_len + offset + 2;
     let mut id = Vec::new();
     if qos == 1 {
+        id.extend_from_slice(&publish[payload_offset..payload_offset + 2]);
         payload_offset += 2; // message ID after topic
-        id.extend_from_slice(&publish[topic_len + 4..topic_len + 6]);
     }
     let payload = publish[payload_offset..].to_vec();
 

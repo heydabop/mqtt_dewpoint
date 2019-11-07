@@ -40,24 +40,24 @@ mod test {
     #[test]
     fn length() {
         assert_eq!(encode_length(16), vec![16]);
-        assert_eq!(decode_length(&vec![0, 16]), (16, 2));
+        assert_eq!(decode_length(&[0, 16]), (16, 2));
 
         assert_eq!(encode_length(97), vec![97]);
-        assert_eq!(decode_length(&vec![0, 97]), (97, 2));
+        assert_eq!(decode_length(&[0, 97]), (97, 2));
 
         assert_eq!(encode_length(127), vec![127]);
-        assert_eq!(decode_length(&vec![0, 127]), (127, 2));
+        assert_eq!(decode_length(&[0, 127]), (127, 2));
 
         assert_eq!(encode_length(128), vec![0x80, 1]);
-        assert_eq!(decode_length(&vec![0, 0x80, 1]), (128, 3));
+        assert_eq!(decode_length(&[0, 0x80, 1]), (128, 3));
 
         assert_eq!(encode_length(321), vec![0xC1, 2]);
-        assert_eq!(decode_length(&vec![0, 0xC1, 2]), (321, 3));
+        assert_eq!(decode_length(&[0, 0xC1, 2]), (321, 3));
 
         assert_eq!(encode_length(16383), vec![0xFF, 0x7F]);
-        assert_eq!(decode_length(&vec![0, 0xFF, 0x7F]), (16383, 3));
+        assert_eq!(decode_length(&[0, 0xFF, 0x7F]), (16383, 3));
 
         assert_eq!(encode_length(16384), vec![0x80, 0x80, 1]);
-        assert_eq!(decode_length(&vec![0, 0x80, 0x80, 1]), (16384, 4));
+        assert_eq!(decode_length(&[0, 0x80, 0x80, 1]), (16384, 4));
     }
 }
