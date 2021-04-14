@@ -27,17 +27,17 @@ pub struct Client {
 impl Client {
     pub fn new(client_id: &str, username: &str, password: &str, keep_alive_secs: u8) -> Self {
         let client_id_len = client_id.len();
-        if client_id_len < 1 || client_id_len > 23 {
+        if !(1..=23).contains(&client_id_len) {
             panic!("Client ID must be between 1 and 23 characters in length");
         }
 
         let username_len = username.len();
-        if username_len < 1 || username_len > 12 {
+        if !(1..=12).contains(&username_len) {
             panic!("Username should be between 1 and 23 characters in length");
         }
 
         let password_len = password.len();
-        if password_len < 1 || password_len > 12 {
+        if !(1..=12).contains(&password_len) {
             panic!("Password should be between 1 and 23 characters in length");
         }
 
