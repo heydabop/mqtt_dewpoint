@@ -3,7 +3,7 @@ pub mod message;
 
 // https://public.dhe.ibm.com/software/dw/webservices/ws-mqtt/MQTT_V3.1_Protocol_Specific.pdf
 
-type PublishHandler = fn(Vec<u8>) -> Option<Vec<u8>>;
+type PublishHandler = Box<dyn Fn(Vec<u8>) -> Option<Vec<u8>> + Send>;
 
 #[allow(clippy::cast_possible_truncation)]
 fn encode_length(mut length: usize) -> Vec<u8> {

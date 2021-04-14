@@ -48,10 +48,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     client.connect(broker_addr)?;
 
     client
-        .subscribe("zigbee2mqtt/tempSensor", calculate_dewpoint)
+        .subscribe(
+            "zigbee2mqtt/tempSensor",
+            calculate_dewpoint("homeassistant/sensor/dewpoint/state"),
+        )
+        .unwrap();
+
+    client
+        .subscribe(
+            "zigbee2mqtt/0x00158d00069afcf8",
+            calculate_dewpoint("homeassistant/sensor/upstairsDewpoint/state"),
+        )
         .unwrap();
 
     client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"\u{b0}F"}"#);
+    client.publish("homeassistant/sensor/upstairsDewpoint/config", r#"{"name":"upstairsDewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/upstairsDewpoint/state","unit_of_measurement":"\u{b0}F"}"#);
 
     let main_thread = thread::current();
     let closing = Arc::new(AtomicBool::new(false));
@@ -72,36 +83,38 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn calculate_dewpoint(payload: Vec<u8>) -> Option<Vec<u8>> {
-    let r: SensorRecord = serde_json::from_str(
-        &String::from_utf8(payload).expect("Error generating string from payload"),
-    )
-    .expect("Error parsing JSON from string");
+fn calculate_dewpoint(topic: &'static str) -> Box<dyn Fn(Vec<u8>) -> Option<Vec<u8>> + Send> {
+    Box::new(move |payload| {
+        let r: SensorRecord = serde_json::from_str(
+            &String::from_utf8(payload).expect("Error generating string from payload"),
+        )
+        .expect("Error parsing JSON from string");
 
-    println!(
-        "Temp: {:.2}\u{b0}C / {:.2}\u{b0}F - Hum: {}%",
-        r.temperature,
-        r.temperature.mul_add(1.8, 32_f64),
-        r.humidity
-    );
+        println!(
+            "Temp: {:.2}\u{b0}C / {:.2}\u{b0}F - Hum: {}%",
+            r.temperature,
+            r.temperature.mul_add(1.8, 32_f64),
+            r.humidity
+        );
 
-    let rh = r.humidity / 100.0;
-    let t = r.temperature;
-    let c = (A * t) / (B + t);
-    let ln_rh = rh.ln();
+        let rh = r.humidity / 100.0;
+        let t = r.temperature;
+        let c = (A * t) / (B + t);
+        let ln_rh = rh.ln();
 
-    let dewpoint = (B * (ln_rh + c)) / (A - ln_rh - c);
-    let dewpoint_f = dewpoint.mul_add(1.8, 32_f64);
+        let dewpoint = (B * (ln_rh + c)) / (A - ln_rh - c);
+        let dewpoint_f = dewpoint.mul_add(1.8, 32_f64);
 
-    println!(
-        "Dewpoint: {:.2}\u{b0}C / {:.2}\u{b0}F",
-        dewpoint, dewpoint_f
-    );
+        println!(
+            "Dewpoint: {:.2}\u{b0}C / {:.2}\u{b0}F",
+            dewpoint, dewpoint_f
+        );
 
-    Some(mqtt::message::make_publish(
-        "homeassistant/sensor/dewpoint/state",
-        &format!("{:.1}", dewpoint_f),
-    ))
+        Some(mqtt::message::make_publish(
+            topic,
+            &format!("{:.1}", dewpoint_f),
+        ))
+    })
 }
 
 #[derive(Deserialize)]
