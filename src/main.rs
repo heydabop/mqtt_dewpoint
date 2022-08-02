@@ -14,14 +14,12 @@ const B: f64 = 243.04;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // config init
-    let filename: &str;
-
     let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 2 {
-        filename = &args[1];
+    let filename = if args.len() >= 2 {
+        &args[1]
     } else {
-        filename = "config.toml";
-    }
+        "config.toml"
+    };
 
     let config = std::fs::read_to_string(filename)?
         .parse::<toml::Value>()
