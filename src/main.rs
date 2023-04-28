@@ -57,8 +57,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .unwrap();
 
-    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"\u{b0}F"}"#);
-    client.publish("homeassistant/sensor/upstairsDewpoint/config", r#"{"name":"upstairsDewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/upstairsDewpoint/state","unit_of_measurement":"\u{b0}F"}"#);
+    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"\u{b0}F"}"#, true);
+    client.publish("homeassistant/sensor/upstairsDewpoint/config", r#"{"name":"upstairsDewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/upstairsDewpoint/state","unit_of_measurement":"\u{b0}F"}"#, true);
 
     let main_thread = thread::current();
     let closing = Arc::new(AtomicBool::new(false));
@@ -109,6 +109,7 @@ fn calculate_dewpoint(topic: &'static str) -> Box<dyn Fn(Vec<u8>) -> Option<Vec<
         Some(mqtt::message::make_publish(
             topic,
             &format!("{:.1}", dewpoint_f),
+            false,
         ))
     })
 }
