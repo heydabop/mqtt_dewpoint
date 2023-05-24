@@ -57,8 +57,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .unwrap();
 
-    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"\u{b0}F"}"#, true);
-    client.publish("homeassistant/sensor/upstairsDewpoint/config", r#"{"name":"upstairsDewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/upstairsDewpoint/state","unit_of_measurement":"\u{b0}F"}"#, true);
+    client.publish("homeassistant/sensor/dewpoint/config", r#"{"name":"dewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/dewpoint/state","unit_of_measurement":"°F"}"#, true);
+    client.publish("homeassistant/sensor/upstairsDewpoint/config", r#"{"name":"upstairsDewpoint","device_class":"temperature","state_topic":"homeassistant/sensor/upstairsDewpoint/state","unit_of_measurement":"°F"}"#, true);
 
     let main_thread = thread::current();
     let closing = Arc::new(AtomicBool::new(false));
@@ -87,7 +87,7 @@ fn calculate_dewpoint(topic: &'static str) -> Box<dyn Fn(Vec<u8>) -> Option<Vec<
         .expect("Error parsing JSON from string");
 
         println!(
-            "Temp: {:.2}\u{b0}C / {:.2}\u{b0}F - Hum: {}%",
+            "Temp: {:.2}°C / {:.2}°F - Hum: {}%",
             r.temperature,
             r.temperature.mul_add(1.8, 32_f64),
             r.humidity
@@ -101,10 +101,7 @@ fn calculate_dewpoint(topic: &'static str) -> Box<dyn Fn(Vec<u8>) -> Option<Vec<
         let dewpoint = (B * (ln_rh + c)) / (A - ln_rh - c);
         let dewpoint_f = dewpoint.mul_add(1.8, 32_f64);
 
-        println!(
-            "Dewpoint: {:.2}\u{b0}C / {:.2}\u{b0}F",
-            dewpoint, dewpoint_f
-        );
+        println!("Dewpoint: {:.2}°C / {:.2}°F", dewpoint, dewpoint_f);
 
         Some(mqtt::message::make_publish(
             topic,
