@@ -49,11 +49,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             calculate_dewpoint("homeassistant/sensor/0x00158d0002c9119d/dewpoint/state"),
         )
         .unwrap();
-
     client
         .subscribe(
             "zigbee2mqtt/0x00158d00069afcf8",
             calculate_dewpoint("homeassistant/sensor/0x00158d00069afcf8/dewpoint/state"),
+        )
+        .unwrap();
+    client
+        .subscribe(
+            "zigbee2mqtt/0x00158d000802e28e",
+            calculate_dewpoint("homeassistant/sensor/0x00158d000802e28e/dewpoint/state"),
         )
         .unwrap();
 
