@@ -1,8 +1,8 @@
 use mqtt::client::Client;
 use serde::Deserialize;
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 extern crate ctrlc;
